@@ -1,8 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * DMA memory management for framework level HCD code (hc_driver)
  *
  * This implementation plugs in through generic "usb_bus" level methods,
  * and should work with all USB controllers, regardless of bus type.
+ *
+ * Released under the GPLv2 only.
  */
 
 #include <linux/module.h>

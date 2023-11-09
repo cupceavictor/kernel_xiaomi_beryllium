@@ -766,6 +766,8 @@ static int vb2ops_venc_queue_setup(struct vb2_queue *vq,
 		return -EINVAL;
 
 	if (*nplanes) {
+		if (*nplanes != q_data->fmt->num_planes)
+			return -EINVAL;
 		for (i = 0; i < *nplanes; i++)
 			if (sizes[i] < q_data->sizeimage[i])
 				return -EINVAL;
@@ -1181,26 +1183,10 @@ static void m2mops_venc_job_abort(void *priv)
 	ctx->state = MTK_STATE_ABORT;
 }
 
-static void m2mops_venc_lock(void *m2m_priv)
-{
-	struct mtk_vcodec_ctx *ctx = m2m_priv;
-
-	mutex_lock(&ctx->dev->dev_mutex);
-}
-
-static void m2mops_venc_unlock(void *m2m_priv)
-{
-	struct mtk_vcodec_ctx *ctx = m2m_priv;
-
-	mutex_unlock(&ctx->dev->dev_mutex);
-}
-
 const struct v4l2_m2m_ops mtk_venc_m2m_ops = {
 	.device_run	= m2mops_venc_device_run,
 	.job_ready	= m2mops_venc_job_ready,
 	.job_abort	= m2mops_venc_job_abort,
-	.lock		= m2mops_venc_lock,
-	.unlock		= m2mops_venc_unlock,
 };
 
 void mtk_vcodec_enc_set_default_params(struct mtk_vcodec_ctx *ctx)

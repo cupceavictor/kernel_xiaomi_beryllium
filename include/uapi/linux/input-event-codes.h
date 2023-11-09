@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  * Input event codes
  *
@@ -407,6 +408,7 @@
 #define BTN_TOOL_MOUSE		0x146
 #define BTN_TOOL_LENS		0x147
 #define BTN_TOOL_QUINTTAP	0x148	/* Five fingers on trackpad */
+#define BTN_STYLUS3		0x149
 #define BTN_TOUCH		0x14a
 #define BTN_STYLUS		0x14b
 #define BTN_STYLUS2		0x14c
@@ -417,7 +419,6 @@
 #define BTN_WHEEL		0x150
 #define BTN_GEAR_DOWN		0x150
 #define BTN_GEAR_UP		0x151
-#define BTN_INFO		0x152
 
 #define KEY_OK			0x160
 #define KEY_SELECT		0x161
@@ -594,6 +595,7 @@
 #define BTN_DPAD_RIGHT		0x223
 
 #define KEY_ALS_TOGGLE		0x230	/* Ambient light sensor */
+#define KEY_ROTATE_LOCK_TOGGLE	0x231	/* Display rotation lock */
 
 #define KEY_BUTTONCONFIG		0x240	/* AL Button Configuration */
 #define KEY_TASKMANAGER		0x241	/* AL Task/Project Manager */
@@ -602,6 +604,7 @@
 #define KEY_APPSELECT		0x244	/* AL Select Task/Application */
 #define KEY_SCREENSAVER		0x245	/* AL Screen Saver */
 #define KEY_VOICECOMMAND		0x246	/* Listening Voice Command */
+#define KEY_ASSISTANT		0x247	/* AL Context-aware desktop assistant */
 
 #define KEY_BRIGHTNESS_MIN		0x250	/* Set Brightness to Minimum */
 #define KEY_BRIGHTNESS_MAX		0x251	/* Set Brightness to Maximum */
@@ -643,6 +646,7 @@
  * e.g. teletext or data broadcast application (MHEG, MHP, HbbTV, etc.)
  */
 #define KEY_DATA			0x277
+#define KEY_ONSCREEN_KEYBOARD		0x278
 
 #define BTN_TRIGGER_HAPPY		0x2c0
 #define BTN_TRIGGER_HAPPY1		0x2c0
@@ -685,14 +689,6 @@
 #define BTN_TRIGGER_HAPPY38		0x2e5
 #define BTN_TRIGGER_HAPPY39		0x2e6
 #define BTN_TRIGGER_HAPPY40		0x2e7
-
-/* Custom fingerprint gestures keys */
-#define KEY_FP_GESTURE_UP		0x2e8
-#define KEY_FP_GESTURE_DOWN		0x2e9
-#define KEY_FP_GESTURE_LEFT		0x2ea
-#define KEY_FP_GESTURE_RIGHT		0x2eb
-#define KEY_FP_GESTURE_LONG_PRESS	0x2ec
-#define KEY_FP_GESTURE_TAP		0x2ed
 
 /* We avoid low common keys in module aliases so they don't get huge. */
 #define KEY_MIN_INTERESTING	KEY_MUTE
@@ -800,10 +796,11 @@
 #define SW_LINEIN_INSERT	0x0d  /* set = inserted */
 #define SW_MUTE_DEVICE		0x0e  /* set = device disabled */
 #define SW_PEN_INSERTED		0x0f  /* set = pen inserted */
-#define SW_HPHL_OVERCURRENT	0x10  /* set = over current on left hph */
-#define SW_HPHR_OVERCURRENT	0x11  /* set = over current on right hph */
-#define SW_MICROPHONE2_INSERT   0x12  /* set = inserted */
-#define SW_UNSUPPORT_INSERT	0x13  /* set = unsupported device inserted */
+#define SW_MACHINE_COVER	0x10  /* set = cover closed */
+#define SW_HPHL_OVERCURRENT	0x11  /* set = over current on left hph */
+#define SW_HPHR_OVERCURRENT	0x12  /* set = over current on right hph */
+#define SW_MICROPHONE2_INSERT	0x13  /* set = inserted */
+#define SW_UNSUPPORT_INSERT	0x14  /* set = unsupported device inserted */
 #define SW_MAX			0x20
 #define SW_CNT			(SW_MAX+1)
 

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0
 hostprogs-y := vdsomunge
 
 obj-vdso := vgettimeofday.o datapage.o
@@ -9,9 +10,10 @@ obj-vdso := $(addprefix $(obj)/, $(obj-vdso))
 ccflags-y := -fPIC -fno-common -fno-builtin -fno-stack-protector
 ccflags-y += -DDISABLE_BRANCH_PROFILING
 
-ldflags-y = -Bsymbolic --no-undefined -soname=linux-vdso.so.1 \
+ldflags-$(CONFIG_CPU_ENDIAN_BE8) := --be8
+ldflags-y := -Bsymbolic --no-undefined -soname=linux-vdso.so.1 \
 	    -z max-page-size=4096 -z common-page-size=4096 \
-	    -nostdlib -shared \
+	    -nostdlib -shared $(ldflags-y) \
 	    $(call ld-option, --hash-style=sysv) \
 	    $(call ld-option, --build-id) \
 	    -T
@@ -26,10 +28,10 @@ CFLAGS_REMOVE_vdso.o = -pg
 CFLAGS_REMOVE_vgettimeofday.o = -pg -Os
 CFLAGS_vgettimeofday.o = -O2
 
-# Disable gcov, kasan, ubsan and kcov profiling for VDSO code
+# Disable gcov profiling for VDSO code
 GCOV_PROFILE := n
-KASAN_SANITIZE := n
-UBSAN_SANITIZE := n
+
+# Prevents link failures: __sanitizer_cov_trace_pc() is not linked in.
 KCOV_INSTRUMENT := n
 
 # Force dependency

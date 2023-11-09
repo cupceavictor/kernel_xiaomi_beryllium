@@ -1,20 +1,15 @@
-/*
- * soc-ops.c  --  Generic ASoC operations
- *
- * Copyright 2005 Wolfson Microelectronics PLC.
- * Copyright 2005 Openedhand Ltd.
- * Copyright (C) 2010 Slimlogic Ltd.
- * Copyright (C) 2010 Texas Instruments Inc.
- *
- * Author: Liam Girdwood <lrg@slimlogic.co.uk>
- *         with code, comments and ideas from :-
- *         Richard Purdie <richard@openedhand.com>
- *
- *  This program is free software; you can redistribute  it and/or modify it
- *  under  the terms of  the GNU General  Public License as published by the
- *  Free Software Foundation;  either version 2 of the  License, or (at your
- *  option) any later version.
- */
+// SPDX-License-Identifier: GPL-2.0+
+//
+// soc-ops.c  --  Generic ASoC operations
+//
+// Copyright 2005 Wolfson Microelectronics PLC.
+// Copyright 2005 Openedhand Ltd.
+// Copyright (C) 2010 Slimlogic Ltd.
+// Copyright (C) 2010 Texas Instruments Inc.
+//
+// Author: Liam Girdwood <lrg@slimlogic.co.uk>
+//         with code, comments and ideas from :-
+//         Richard Purdie <richard@openedhand.com>
 
 #include <linux/module.h>
 #include <linux/moduleparam.h>
@@ -120,7 +115,7 @@ int snd_soc_put_enum_double(struct snd_kcontrol *kcontrol,
 EXPORT_SYMBOL_GPL(snd_soc_put_enum_double);
 
 /**
- * snd_soc_read_signed - Read a codec register and interprete as signed value
+ * snd_soc_read_signed - Read a codec register and interpret as signed value
  * @component: component
  * @reg: Register to read
  * @mask: Mask to use after shifting the register value
@@ -201,10 +196,7 @@ int snd_soc_info_volsw(struct snd_kcontrol *kcontrol,
 
 	uinfo->count = snd_soc_volsw_is_stereo(mc) ? 2 : 1;
 	uinfo->value.integer.min = 0;
-	if (uinfo->type == SNDRV_CTL_ELEM_TYPE_INTEGER)
-		uinfo->value.integer.max = platform_max - mc->min;
-	else
-		uinfo->value.integer.max = platform_max;
+	uinfo->value.integer.max = platform_max - mc->min;
 	return 0;
 }
 EXPORT_SYMBOL_GPL(snd_soc_info_volsw);
@@ -224,12 +216,14 @@ EXPORT_SYMBOL_GPL(snd_soc_info_volsw);
 int snd_soc_info_volsw_sx(struct snd_kcontrol *kcontrol,
 			  struct snd_ctl_elem_info *uinfo)
 {
+	struct soc_mixer_control *mc =
+		(struct soc_mixer_control *)kcontrol->private_value;
+
 	snd_soc_info_volsw(kcontrol, uinfo);
 	/* Max represents the number of levels in an SX control not the
-	 * maximum value.
-	 * uinfo->value.integer.max is set to number of levels
-	 * in snd_soc_info_volsw. No further adjustment is necessary.
+	 * maximum value, so add the minimum value back on
 	 */
+	uinfo->value.integer.max += mc->min;
 
 	return 0;
 }
@@ -449,7 +443,7 @@ int snd_soc_put_volsw_sx(struct snd_kcontrol *kcontrol,
 	unsigned int val, val_mask, val2 = 0;
 
 	val = ucontrol->value.integer.value[0];
-	if (mc->platform_max && ((int)val + min) > mc->platform_max)
+	if (mc->platform_max && val > mc->platform_max)
 		return -EINVAL;
 	if (val > max)
 		return -EINVAL;
@@ -946,12 +940,11 @@ int snd_soc_put_xr_sx(struct snd_kcontrol *kcontrol,
 	unsigned int invert = mc->invert;
 	unsigned long mask = (1UL<<mc->nbits)-1;
 	long max = mc->max;
-	long min = mc->min;
 	long val = ucontrol->value.integer.value[0];
 	unsigned int i, regval, regmask;
 	int err;
 
-	if (val < mc->min || ((int)val + min) > mc->max)
+	if (val < mc->min || val > mc->max)
 		return -EINVAL;
 	if (invert)
 		val = max - val;

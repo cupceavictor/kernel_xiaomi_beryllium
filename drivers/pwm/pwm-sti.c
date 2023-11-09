@@ -375,10 +375,11 @@ static int sti_pwm_capture(struct pwm_chip *chip, struct pwm_device *pwm,
 		effective_ticks = clk_get_rate(pc->cpt_clk);
 
 		result->period = (high + low) * NSEC_PER_SEC;
-		result->period /= effective_ticks;
+		result->period = do_div(result->period, effective_ticks);
 
 		result->duty_cycle = high * NSEC_PER_SEC;
-		result->duty_cycle /= effective_ticks;
+		result->duty_cycle = do_div(result->duty_cycle,
+			effective_ticks);
 
 		break;
 
@@ -635,7 +636,6 @@ skip_cpt:
 	pc->chip.ops = &sti_pwm_ops;
 	pc->chip.base = -1;
 	pc->chip.npwm = pc->cdata->pwm_num_devs;
-	pc->chip.can_sleep = true;
 
 	ret = pwmchip_add(&pc->chip);
 	if (ret < 0) {

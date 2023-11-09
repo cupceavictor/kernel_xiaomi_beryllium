@@ -283,9 +283,8 @@ static int __init psci_features(u32 psci_func_id)
 }
 
 #ifdef CONFIG_CPU_IDLE
-static __maybe_unused DEFINE_PER_CPU_READ_MOSTLY(u32 *, psci_power_state);
+static DEFINE_PER_CPU_READ_MOSTLY(u32 *, psci_power_state);
 
-#ifdef CONFIG_DT_IDLE_STATES
 static int psci_dt_cpu_init_idle(struct device_node *cpu_node, int cpu)
 {
 	int i, ret, count = 0;
@@ -315,8 +314,8 @@ static int psci_dt_cpu_init_idle(struct device_node *cpu_node, int cpu)
 					   "arm,psci-suspend-param",
 					   &state);
 		if (ret) {
-			pr_warn(" * %s missing arm,psci-suspend-param property\n",
-				state_node->full_name);
+			pr_warn(" * %pOF missing arm,psci-suspend-param property\n",
+				state_node);
 			of_node_put(state_node);
 			goto free_mem;
 		}
@@ -338,10 +337,6 @@ free_mem:
 	kfree(psci_states);
 	return ret;
 }
-#else
-static int psci_dt_cpu_init_idle(struct device_node *cpu_node, int cpu)
-{ return 0; }
-#endif
 
 #ifdef CONFIG_ACPI
 #include <acpi/processor.h>
@@ -420,7 +415,7 @@ int psci_cpu_init_idle(unsigned int cpu)
 static int psci_suspend_finisher(unsigned long state_id)
 {
 	return psci_ops.cpu_suspend(state_id,
-				    virt_to_phys(cpu_resume));
+				    __pa_symbol(cpu_resume));
 }
 int psci_cpu_suspend_enter(unsigned long state_id)
 {
@@ -455,7 +450,7 @@ CPUIDLE_METHOD_OF_DECLARE(psci, "psci", &psci_cpuidle_ops);
 static int psci_system_suspend(unsigned long unused)
 {
 	return invoke_psci_fn(PSCI_FN_NATIVE(1_0, SYSTEM_SUSPEND),
-			      virt_to_phys(cpu_resume), 0, 0);
+			      __pa_symbol(cpu_resume), 0, 0);
 }
 
 static int psci_system_suspend_enter(suspend_state_t state)
@@ -694,7 +689,7 @@ int __init psci_dt_init(void)
 
 	np = of_find_matching_node_and_match(NULL, psci_of_match, &matched_np);
 
-	if (!np)
+	if (!np || !of_device_is_available(np))
 		return -ENODEV;
 
 	init_fn = (psci_initcall_t)matched_np->data;

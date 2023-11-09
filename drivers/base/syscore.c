@@ -1,9 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  *  syscore.c - Execution of system core operations.
  *
  *  Copyright (C) 2011 Rafael J. Wysocki <rjw@sisk.pl>, Novell Inc.
- *
- *  This file is released under the GPLv2.
  */
 
 #include <linux/syscore_ops.h>
@@ -12,7 +11,6 @@
 #include <linux/suspend.h>
 #include <trace/events/power.h>
 #include <linux/wakeup_reason.h>
-#include <linux/irq.h>
 
 static LIST_HEAD(syscore_ops_list);
 static DEFINE_MUTEX(syscore_ops_lock);

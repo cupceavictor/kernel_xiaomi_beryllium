@@ -14,34 +14,36 @@
 #include <linux/module.h>
 #include <linux/slab.h>
 
+static DEFINE_SPINLOCK(cpufreq_stats_lock);
+
 struct cpufreq_stats {
 	unsigned int total_trans;
-	atomic64_t last_time;
+	unsigned long long last_time;
 	unsigned int max_state;
 	unsigned int state_num;
 	unsigned int last_index;
-	atomic64_t *time_in_state;
+	u64 *time_in_state;
 	unsigned int *freq_table;
 	unsigned int *trans_table;
 };
 
-static int cpufreq_stats_update(struct cpufreq_stats *stats)
+static void cpufreq_stats_update(struct cpufreq_stats *stats)
 {
 	unsigned long long cur_time = get_jiffies_64();
-	unsigned long long time = cur_time;
 
-	time = atomic64_xchg(&stats->last_time, time);
-	atomic64_add(cur_time - time, &stats->time_in_state[stats->last_index]);
-	return 0;
+	spin_lock(&cpufreq_stats_lock);
+	stats->time_in_state[stats->last_index] += cur_time - stats->last_time;
+	stats->last_time = cur_time;
+	spin_unlock(&cpufreq_stats_lock);
 }
 
 static void cpufreq_stats_clear_table(struct cpufreq_stats *stats)
 {
 	unsigned int count = stats->max_state;
 
-	memset(stats->time_in_state, 0, count * sizeof(atomic64_t));
+	memset(stats->time_in_state, 0, count * sizeof(u64));
 	memset(stats->trans_table, 0, count * count * sizeof(int));
-	atomic64_set(&stats->last_time, get_jiffies_64());
+	stats->last_time = get_jiffies_64();
 	stats->total_trans = 0;
 }
 
@@ -56,12 +58,14 @@ static ssize_t show_time_in_state(struct cpufreq_policy *policy, char *buf)
 	ssize_t len = 0;
 	int i;
 
+	if (policy->fast_switch_enabled)
+		return 0;
+
 	cpufreq_stats_update(stats);
 	for (i = 0; i < stats->state_num; i++) {
 		len += sprintf(buf + len, "%u %llu\n", stats->freq_table[i],
 			(unsigned long long)
-			jiffies_64_to_clock_t(atomic64_read(
-					&stats->time_in_state[i])));
+			jiffies_64_to_clock_t(stats->time_in_state[i]));
 	}
 	return len;
 }
@@ -79,6 +83,9 @@ static ssize_t show_trans_table(struct cpufreq_policy *policy, char *buf)
 	struct cpufreq_stats *stats = policy->stats;
 	ssize_t len = 0;
 	int i, j;
+
+	if (policy->fast_switch_enabled)
+		return 0;
 
 	len += snprintf(buf + len, PAGE_SIZE - len, "   From  :    To\n");
 	len += snprintf(buf + len, PAGE_SIZE - len, "         : ");
@@ -110,8 +117,11 @@ static ssize_t show_trans_table(struct cpufreq_policy *policy, char *buf)
 			break;
 		len += snprintf(buf + len, PAGE_SIZE - len, "\n");
 	}
-	if (len >= PAGE_SIZE)
-		return PAGE_SIZE;
+
+	if (len >= PAGE_SIZE) {
+		pr_warn_once("cpufreq transition table exceeds PAGE_SIZE. Disabling\n");
+		return -EFBIG;
+	}
 	return len;
 }
 cpufreq_freq_attr_ro(trans_table);
@@ -127,7 +137,7 @@ static struct attribute *default_attrs[] = {
 	&trans_table.attr,
 	NULL
 };
-static struct attribute_group stats_attr_group = {
+static const struct attribute_group stats_attr_group = {
 	.attrs = default_attrs,
 	.name = "stats"
 };
@@ -162,11 +172,10 @@ void cpufreq_stats_create_table(struct cpufreq_policy *policy)
 	unsigned int i = 0, count = 0, ret = -ENOMEM;
 	struct cpufreq_stats *stats;
 	unsigned int alloc_size;
-	struct cpufreq_frequency_table *pos, *table;
+	struct cpufreq_frequency_table *pos;
 
-	/* We need cpufreq table for creating stats table */
-	table = policy->freq_table;
-	if (unlikely(!table))
+	count = cpufreq_table_count_valid_entries(policy);
+	if (!count)
 		return;
 
 	/* stats already initialized */
@@ -177,11 +186,7 @@ void cpufreq_stats_create_table(struct cpufreq_policy *policy)
 	if (!stats)
 		return;
 
-	/* Find total allocation size */
-	cpufreq_for_each_valid_entry(pos, table)
-		count++;
-
-	alloc_size = count * sizeof(int) + count * sizeof(atomic64_t);
+	alloc_size = count * sizeof(int) + count * sizeof(u64);
 
 	alloc_size += count * count * sizeof(int);
 
@@ -197,12 +202,12 @@ void cpufreq_stats_create_table(struct cpufreq_policy *policy)
 	stats->max_state = count;
 
 	/* Find valid-unique entries */
-	cpufreq_for_each_valid_entry(pos, table)
+	cpufreq_for_each_valid_entry(pos, policy->freq_table)
 		if (freq_table_get_index(stats, pos->frequency) == -1)
 			stats->freq_table[i++] = pos->frequency;
 
 	stats->state_num = i;
-	atomic64_set(&stats->last_time, get_jiffies_64());
+	stats->last_time = get_jiffies_64();
 	stats->last_index = freq_table_get_index(stats, policy->cur);
 
 	policy->stats = stats;

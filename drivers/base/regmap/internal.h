@@ -77,6 +77,7 @@ struct regmap {
 	int async_ret;
 
 #ifdef CONFIG_DEBUG_FS
+	bool debugfs_disable;
 	struct dentry *debugfs;
 	const char *debugfs_name;
 
@@ -86,9 +87,6 @@ struct regmap {
 
 	struct list_head debugfs_off_cache;
 	struct mutex cache_lock;
-
-	unsigned int dump_address;
-	unsigned int dump_count;
 #endif
 
 	unsigned int max_register;
@@ -96,10 +94,12 @@ struct regmap {
 	bool (*readable_reg)(struct device *dev, unsigned int reg);
 	bool (*volatile_reg)(struct device *dev, unsigned int reg);
 	bool (*precious_reg)(struct device *dev, unsigned int reg);
+	bool (*readable_noinc_reg)(struct device *dev, unsigned int reg);
 	const struct regmap_access_table *wr_table;
 	const struct regmap_access_table *rd_table;
 	const struct regmap_access_table *volatile_table;
 	const struct regmap_access_table *precious_table;
+	const struct regmap_access_table *rd_noinc_table;
 
 	int (*reg_read)(void *context, unsigned int reg, unsigned int *val);
 	int (*reg_write)(void *context, unsigned int reg, unsigned int val);
@@ -160,6 +160,8 @@ struct regmap {
 
 	struct rb_root range_tree;
 	void *selector_work_buf;	/* Scratch buffer used for selector */
+
+	struct hwspinlock *hwlock;
 };
 
 struct regcache_ops {
@@ -181,6 +183,7 @@ bool regmap_writeable(struct regmap *map, unsigned int reg);
 bool regmap_readable(struct regmap *map, unsigned int reg);
 bool regmap_volatile(struct regmap *map, unsigned int reg);
 bool regmap_precious(struct regmap *map, unsigned int reg);
+bool regmap_readable_noinc(struct regmap *map, unsigned int reg);
 
 int _regmap_write(struct regmap *map, unsigned int reg,
 		  unsigned int val);
@@ -216,10 +219,17 @@ struct regmap_field {
 extern void regmap_debugfs_initcall(void);
 extern void regmap_debugfs_init(struct regmap *map, const char *name);
 extern void regmap_debugfs_exit(struct regmap *map);
+
+static inline void regmap_debugfs_disable(struct regmap *map)
+{
+	map->debugfs_disable = true;
+}
+
 #else
 static inline void regmap_debugfs_initcall(void) { }
 static inline void regmap_debugfs_init(struct regmap *map, const char *name) { }
 static inline void regmap_debugfs_exit(struct regmap *map) { }
+static inline void regmap_debugfs_disable(struct regmap *map) { }
 #endif
 
 /* regcache core declarations */
@@ -250,10 +260,6 @@ int regcache_lookup_reg(struct regmap *map, unsigned int reg);
 
 int _regmap_raw_write(struct regmap *map, unsigned int reg,
 		      const void *val, size_t val_len);
-
-int _regmap_raw_multi_reg_write(struct regmap *map,
-				const struct reg_sequence *regs,
-				size_t num_regs);
 
 void regmap_async_complete_cb(struct regmap_async *async, int ret);
 

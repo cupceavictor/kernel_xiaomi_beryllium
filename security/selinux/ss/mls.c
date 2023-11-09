@@ -1,7 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Implementation of the multi-level security (MLS) policy.
  *
- * Author : Stephen Smalley, <sds@epoch.ncsc.mil>
+ * Author : Stephen Smalley, <sds@tycho.nsa.gov>
  */
 /*
  * Updated: Trusted Computer Solutions, Inc. <dgoeddel@trustedcs.com>
@@ -244,9 +245,13 @@ int mls_context_to_sid(struct policydb *pol,
 	char *rangep[2];
 
 	if (!pol->mls_enabled) {
-		if ((def_sid != SECSID_NULL && oldc) || (*scontext) == '\0')
-			return 0;
-		return -EINVAL;
+		/*
+		 * With no MLS, only return -EINVAL if there is a MLS field
+		 * and it did not come from an xattr.
+		 */
+		if (oldc && def_sid == SECSID_NULL)
+			return -EINVAL;
+		return 0;
 	}
 
 	/*

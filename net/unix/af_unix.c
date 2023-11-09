@@ -85,7 +85,7 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/signal.h>
-#include <linux/sched.h>
+#include <linux/sched/signal.h>
 #include <linux/errno.h>
 #include <linux/string.h>
 #include <linux/stat.h>
@@ -100,7 +100,7 @@
 #include <linux/in.h>
 #include <linux/fs.h>
 #include <linux/slab.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <linux/skbuff.h>
 #include <linux/netdevice.h>
 #include <net/net_namespace.h>
@@ -117,6 +117,7 @@
 #include <net/checksum.h>
 #include <linux/security.h>
 #include <linux/freezer.h>
+#include <linux/file.h>
 
 #include "scm.h"
 
@@ -219,7 +220,7 @@ EXPORT_SYMBOL_GPL(unix_peer_get);
 
 static inline void unix_release_addr(struct unix_address *addr)
 {
-	if (atomic_dec_and_test(&addr->refcnt))
+	if (refcount_dec_and_test(&addr->refcnt))
 		kfree(addr);
 }
 
@@ -325,7 +326,7 @@ static struct sock *unix_find_socket_byinode(struct inode *i)
 		    &unix_socket_table[i->i_ino & (UNIX_HASH_SIZE - 1)]) {
 		struct dentry *dentry = unix_sk(s)->path.dentry;
 
-		if (dentry && d_real_inode(dentry) == i) {
+		if (dentry && d_backing_inode(dentry) == i) {
 			sock_hold(s);
 			goto found;
 		}
@@ -352,7 +353,7 @@ found:
  * are still connected to it and there's no way to inform "a polling
  * implementation" that it should let go of a certain wait queue
  *
- * In order to propagate a wake up, a wait_queue_t of the client
+ * In order to propagate a wake up, a wait_queue_entry_t of the client
  * socket is enqueued on the peer_wait queue of the server socket
  * whose wake function does a wake_up on the ordinary client socket
  * wait queue. This connection is established whenever a write (or
@@ -361,7 +362,7 @@ found:
  * was relayed.
  */
 
-static int unix_dgram_peer_wake_relay(wait_queue_t *q, unsigned mode, int flags,
+static int unix_dgram_peer_wake_relay(wait_queue_entry_t *q, unsigned mode, int flags,
 				      void *key)
 {
 	struct unix_sock *u;
@@ -376,7 +377,7 @@ static int unix_dgram_peer_wake_relay(wait_queue_t *q, unsigned mode, int flags,
 	/* relaying can only happen while the wq still exists */
 	u_sleep = sk_sleep(&u->sk);
 	if (u_sleep)
-		wake_up_interruptible_poll(u_sleep, key);
+		wake_up_interruptible_poll(u_sleep, key_to_poll(key));
 
 	return 0;
 }
@@ -424,9 +425,9 @@ static void unix_dgram_peer_wake_disconnect_wakeup(struct sock *sk,
 {
 	unix_dgram_peer_wake_disconnect(sk, other);
 	wake_up_interruptible_poll(sk_sleep(sk),
-				   POLLOUT |
-				   POLLWRNORM |
-				   POLLWRBAND);
+				   EPOLLOUT |
+				   EPOLLWRNORM |
+				   EPOLLWRBAND);
 }
 
 /* preconditions:
@@ -439,7 +440,12 @@ static int unix_dgram_peer_wake_me(struct sock *sk, struct sock *other)
 
 	connected = unix_dgram_peer_wake_connect(sk, other);
 
-	if (unix_recvq_full(other))
+	/* If other is SOCK_DEAD, we want to make sure we signal
+	 * POLLOUT, such that a subsequent write() can get a
+	 * -ECONNREFUSED. Otherwise, if we haven't queued any skbs
+	 * to other and its full, we will hang waiting for POLLOUT.
+	 */
+	if (unix_recvq_full_lockless(other) && !sock_flag(other, SOCK_DEAD))
 		return 1;
 
 	if (connected)
@@ -451,7 +457,7 @@ static int unix_dgram_peer_wake_me(struct sock *sk, struct sock *other)
 static int unix_writable(const struct sock *sk)
 {
 	return sk->sk_state != TCP_LISTEN &&
-	       (atomic_read(&sk->sk_wmem_alloc) << 2) <= sk->sk_sndbuf;
+	       (refcount_read(&sk->sk_wmem_alloc) << 2) <= sk->sk_sndbuf;
 }
 
 static void unix_write_space(struct sock *sk)
@@ -463,7 +469,7 @@ static void unix_write_space(struct sock *sk)
 		wq = rcu_dereference(sk->sk_wq);
 		if (skwq_has_sleeper(wq))
 			wake_up_interruptible_sync_poll(&wq->wait,
-				POLLOUT | POLLWRNORM | POLLWRBAND);
+				EPOLLOUT | EPOLLWRNORM | EPOLLWRBAND);
 		sk_wake_async(sk, SOCK_WAKE_SPACE, POLL_OUT);
 	}
 	rcu_read_unlock();
@@ -496,7 +502,7 @@ static void unix_sock_destructor(struct sock *sk)
 
 	skb_queue_purge(&sk->sk_receive_queue);
 
-	WARN_ON(atomic_read(&sk->sk_wmem_alloc));
+	WARN_ON(refcount_read(&sk->sk_wmem_alloc));
 	WARN_ON(!sk_unhashed(sk));
 	WARN_ON(sk->sk_socket);
 	if (!sock_flag(sk, SOCK_DEAD)) {
@@ -530,7 +536,7 @@ static void unix_release_sock(struct sock *sk, int embrion)
 	/* Clear state */
 	unix_state_lock(sk);
 	sock_orphan(sk);
-	sk->sk_shutdown = SHUTDOWN_MASK;
+	WRITE_ONCE(sk->sk_shutdown, SHUTDOWN_MASK);
 	path	     = u->path;
 	u->path.dentry = NULL;
 	u->path.mnt = NULL;
@@ -548,7 +554,7 @@ static void unix_release_sock(struct sock *sk, int embrion)
 		if (sk->sk_type == SOCK_STREAM || sk->sk_type == SOCK_SEQPACKET) {
 			unix_state_lock(skpair);
 			/* No more writes */
-			skpair->sk_shutdown = SHUTDOWN_MASK;
+			WRITE_ONCE(skpair->sk_shutdown, SHUTDOWN_MASK);
 			if (!skb_queue_empty(&sk->sk_receive_queue) || embrion)
 				skpair->sk_err = ECONNRESET;
 			unix_state_unlock(skpair);
@@ -588,7 +594,7 @@ static void unix_release_sock(struct sock *sk, int embrion)
 	 *	  What the above comment does talk about? --ANK(980817)
 	 */
 
-	if (unix_tot_inflight)
+	if (READ_ONCE(unix_tot_inflight))
 		unix_gc();		/* Garbage collect fds */
 }
 
@@ -668,12 +674,15 @@ static int unix_bind(struct socket *, struct sockaddr *, int);
 static int unix_stream_connect(struct socket *, struct sockaddr *,
 			       int addr_len, int flags);
 static int unix_socketpair(struct socket *, struct socket *);
-static int unix_accept(struct socket *, struct socket *, int);
-static int unix_getname(struct socket *, struct sockaddr *, int *, int);
-static unsigned int unix_poll(struct file *, struct socket *, poll_table *);
-static unsigned int unix_dgram_poll(struct file *, struct socket *,
+static int unix_accept(struct socket *, struct socket *, int, bool);
+static int unix_getname(struct socket *, struct sockaddr *, int);
+static __poll_t unix_poll(struct file *, struct socket *, poll_table *);
+static __poll_t unix_dgram_poll(struct file *, struct socket *,
 				    poll_table *);
 static int unix_ioctl(struct socket *, unsigned int, unsigned long);
+#ifdef CONFIG_COMPAT
+static int unix_compat_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg);
+#endif
 static int unix_shutdown(struct socket *, int);
 static int unix_stream_sendmsg(struct socket *, struct msghdr *, size_t);
 static int unix_stream_recvmsg(struct socket *, struct msghdr *, size_t, int);
@@ -697,7 +706,7 @@ static int unix_set_peek_off(struct sock *sk, int val)
 	if (mutex_lock_interruptible(&u->iolock))
 		return -EINTR;
 
-	sk->sk_peek_off = val;
+	WRITE_ONCE(sk->sk_peek_off, val);
 	mutex_unlock(&u->iolock);
 
 	return 0;
@@ -715,6 +724,9 @@ static const struct proto_ops unix_stream_ops = {
 	.getname =	unix_getname,
 	.poll =		unix_poll,
 	.ioctl =	unix_ioctl,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl =	unix_compat_ioctl,
+#endif
 	.listen =	unix_listen,
 	.shutdown =	unix_shutdown,
 	.setsockopt =	sock_no_setsockopt,
@@ -738,6 +750,9 @@ static const struct proto_ops unix_dgram_ops = {
 	.getname =	unix_getname,
 	.poll =		unix_dgram_poll,
 	.ioctl =	unix_ioctl,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl =	unix_compat_ioctl,
+#endif
 	.listen =	sock_no_listen,
 	.shutdown =	unix_shutdown,
 	.setsockopt =	sock_no_setsockopt,
@@ -760,6 +775,9 @@ static const struct proto_ops unix_seqpacket_ops = {
 	.getname =	unix_getname,
 	.poll =		unix_dgram_poll,
 	.ioctl =	unix_ioctl,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl =	unix_compat_ioctl,
+#endif
 	.listen =	unix_listen,
 	.shutdown =	unix_shutdown,
 	.setsockopt =	sock_no_setsockopt,
@@ -777,14 +795,6 @@ static struct proto unix_proto = {
 	.obj_size		= sizeof(struct unix_sock),
 };
 
-/*
- * AF_UNIX sockets do not interact with hardware, hence they
- * dont trigger interrupts - so it's safe for them to have
- * bh-unsafe locking for their sk_receive_queue.lock. Split off
- * this special lock-class by reinitializing the spinlock key:
- */
-static struct lock_class_key af_unix_sk_receive_queue_lock_key;
-
 static struct sock *unix_create1(struct net *net, struct socket *sock, int kern)
 {
 	struct sock *sk = NULL;
@@ -799,8 +809,6 @@ static struct sock *unix_create1(struct net *net, struct socket *sock, int kern)
 		goto out;
 
 	sock_init_data(sock, sk);
-	lockdep_set_class(&sk->sk_receive_queue.lock,
-				&af_unix_sk_receive_queue_lock_key);
 
 	sk->sk_allocation	= GFP_KERNEL_ACCOUNT;
 	sk->sk_write_space	= unix_write_space;
@@ -846,6 +854,7 @@ static int unix_create(struct net *net, struct socket *sock, int protocol,
 		 */
 	case SOCK_RAW:
 		sock->type = SOCK_DGRAM;
+		/* fall through */
 	case SOCK_DGRAM:
 		sock->ops = &unix_dgram_ops;
 		break;
@@ -896,7 +905,7 @@ static int unix_autobind(struct socket *sock)
 		goto out;
 
 	addr->name->sun_family = AF_UNIX;
-	atomic_set(&addr->refcnt, 1);
+	refcount_set(&addr->refcnt, 1);
 
 retry:
 	addr->len = sprintf(addr->name->sun_path+1, "%05x", ordernum) + 1 + sizeof(short);
@@ -946,7 +955,7 @@ static struct sock *unix_find_other(struct net *net,
 		err = kern_path(sunname->sun_path, LOOKUP_FOLLOW, &path);
 		if (err)
 			goto fail;
-		inode = d_real_inode(path.dentry);
+		inode = d_backing_inode(path.dentry);
 		err = inode_permission(inode, MAY_WRITE);
 		if (err)
 			goto put_fail;
@@ -1025,10 +1034,10 @@ static int unix_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 	struct sockaddr_un *sunaddr = (struct sockaddr_un *)uaddr;
 	char *sun_path = sunaddr->sun_path;
 	int err;
-	unsigned int hash = 0;
+	unsigned int hash;
 	struct unix_address *addr;
 	struct hlist_head *list;
-	struct path path = { NULL, NULL };
+	struct path path = { };
 
 	err = -EINVAL;
 	if (addr_len < offsetofend(struct sockaddr_un, sun_family) ||
@@ -1072,11 +1081,11 @@ static int unix_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 	memcpy(addr->name, sunaddr, addr_len);
 	addr->len = addr_len;
 	addr->hash = hash ^ sk->sk_type;
-	atomic_set(&addr->refcnt, 1);
+	refcount_set(&addr->refcnt, 1);
 
 	if (sun_path[0]) {
 		addr->hash = UNIX_HASH_SIZE;
-		hash = d_real_inode(path.dentry)->i_ino & (UNIX_HASH_SIZE - 1);
+		hash = d_backing_inode(path.dentry)->i_ino & (UNIX_HASH_SIZE - 1);
 		spin_lock(&unix_table_lock);
 		u->path = path;
 		list = &unix_socket_table[hash];
@@ -1223,7 +1232,7 @@ static long unix_wait_for_peer(struct sock *other, long timeo)
 
 	sched = !sock_flag(other, SOCK_DEAD) &&
 		!(other->sk_shutdown & RCV_SHUTDOWN) &&
-		unix_recvq_full(other);
+		unix_recvq_full_lockless(other);
 
 	unix_state_unlock(other);
 
@@ -1386,7 +1395,7 @@ restart:
 		path_get(&otheru->path);
 		newu->path = otheru->path;
 	}
-	atomic_inc(&otheru->addr->refcnt);
+	refcount_inc(&otheru->addr->refcnt);
 	smp_store_release(&newu->addr, otheru->addr);
 
 	/* Set credentials */
@@ -1453,7 +1462,8 @@ static void unix_sock_inherit_flags(const struct socket *old,
 		set_bit(SOCK_PASSSEC, &new->flags);
 }
 
-static int unix_accept(struct socket *sock, struct socket *newsock, int flags)
+static int unix_accept(struct socket *sock, struct socket *newsock, int flags,
+		       bool kern)
 {
 	struct sock *sk = sock->sk;
 	struct sock *tsk;
@@ -1497,7 +1507,7 @@ out:
 }
 
 
-static int unix_getname(struct socket *sock, struct sockaddr *uaddr, int *uaddr_len, int peer)
+static int unix_getname(struct socket *sock, struct sockaddr *uaddr, int peer)
 {
 	struct sock *sk = sock->sk;
 	struct unix_address *addr;
@@ -1519,10 +1529,10 @@ static int unix_getname(struct socket *sock, struct sockaddr *uaddr, int *uaddr_
 	if (!addr) {
 		sunaddr->sun_family = AF_UNIX;
 		sunaddr->sun_path[0] = 0;
-		*uaddr_len = sizeof(short);
+		err = sizeof(short);
 	} else {
-		*uaddr_len = addr->len;
-		memcpy(sunaddr, addr->name, *uaddr_len);
+		err = addr->len;
+		memcpy(sunaddr, addr->name, addr->len);
 	}
 	sock_put(sk);
 out:
@@ -1663,7 +1673,6 @@ static int unix_dgram_sendmsg(struct socket *sock, struct msghdr *msg,
 	struct sk_buff *skb;
 	long timeo;
 	struct scm_cookie scm;
-	int max_level;
 	int data_len = 0;
 	int sk_locked;
 
@@ -1715,7 +1724,6 @@ static int unix_dgram_sendmsg(struct socket *sock, struct msghdr *msg,
 	err = unix_scm_to_skb(&scm, skb, true);
 	if (err < 0)
 		goto out_free;
-	max_level = err + 1;
 
 	skb_put(skb, len - data_len);
 	skb->data_len = data_len;
@@ -1834,8 +1842,6 @@ restart_locked:
 		__net_timestamp(skb);
 	maybe_add_creds(skb, sock, other);
 	skb_queue_tail(&other->sk_receive_queue, skb);
-	if (max_level > unix_sk(other)->recursion_level)
-		unix_sk(other)->recursion_level = max_level;
 	unix_state_unlock(other);
 	other->sk_data_ready(other);
 	sock_put(other);
@@ -1856,7 +1862,7 @@ out:
 }
 
 /* We use paged skbs for stream sockets, and limit occupancy to 32768
- * bytes, and a minimun of a full page.
+ * bytes, and a minimum of a full page.
  */
 #define UNIX_SKB_FRAGS_SZ (PAGE_SIZE << get_order(32768))
 
@@ -1870,7 +1876,6 @@ static int unix_stream_sendmsg(struct socket *sock, struct msghdr *msg,
 	int sent = 0;
 	struct scm_cookie scm;
 	bool fds_sent = false;
-	int max_level;
 	int data_len;
 
 	wait_for_unix_gc();
@@ -1920,7 +1925,6 @@ static int unix_stream_sendmsg(struct socket *sock, struct msghdr *msg,
 			kfree_skb(skb);
 			goto out_err;
 		}
-		max_level = err + 1;
 		fds_sent = true;
 
 		skb_put(skb, size - data_len);
@@ -1940,8 +1944,6 @@ static int unix_stream_sendmsg(struct socket *sock, struct msghdr *msg,
 
 		maybe_add_creds(skb, sock, other);
 		skb_queue_tail(&other->sk_receive_queue, skb);
-		if (max_level > unix_sk(other)->recursion_level)
-			unix_sk(other)->recursion_level = max_level;
 		unix_state_unlock(other);
 		other->sk_data_ready(other);
 		sent += size;
@@ -1982,6 +1984,7 @@ static ssize_t unix_stream_sendpage(struct socket *socket, struct page *page,
 
 	if (false) {
 alloc_skb:
+		spin_unlock(&other->sk_receive_queue.lock);
 		unix_state_unlock(other);
 		mutex_unlock(&unix_sk(other)->iolock);
 		newskb = sock_alloc_send_pskb(sk, 0, 0, flags & MSG_DONTWAIT,
@@ -2021,6 +2024,7 @@ alloc_skb:
 		init_scm = false;
 	}
 
+	spin_lock(&other->sk_receive_queue.lock);
 	skb = skb_peek_tail(&other->sk_receive_queue);
 	if (tail && tail == skb) {
 		skb = newskb;
@@ -2048,17 +2052,14 @@ alloc_skb:
 	skb->len += size;
 	skb->data_len += size;
 	skb->truesize += size;
-	atomic_add(size, &sk->sk_wmem_alloc);
+	refcount_add(size, &sk->sk_wmem_alloc);
 
 	if (newskb) {
-		err = unix_scm_to_skb(&scm, skb, false);
-		if (err)
-			goto err_state_unlock;
-		spin_lock(&other->sk_receive_queue.lock);
+		unix_scm_to_skb(&scm, skb, false);
 		__skb_queue_tail(&other->sk_receive_queue, newskb);
-		spin_unlock(&other->sk_receive_queue.lock);
 	}
 
+	spin_unlock(&other->sk_receive_queue.lock);
 	unix_state_unlock(other);
 	mutex_unlock(&unix_sk(other)->iolock);
 
@@ -2140,8 +2141,8 @@ static int unix_dgram_recvmsg(struct socket *sock, struct msghdr *msg,
 		mutex_lock(&u->iolock);
 
 		skip = sk_peek_offset(sk, flags);
-		skb = __skb_try_recv_datagram(sk, flags, &peeked, &skip, &err,
-					      &last);
+		skb = __skb_try_recv_datagram(sk, flags, NULL, &peeked, &skip,
+					      &err, &last);
 		if (skb)
 			break;
 
@@ -2164,8 +2165,8 @@ static int unix_dgram_recvmsg(struct socket *sock, struct msghdr *msg,
 
 	if (wq_has_sleeper(&u->peer_wait))
 		wake_up_interruptible_sync_poll(&u->peer_wait,
-						POLLOUT | POLLWRNORM |
-						POLLWRBAND);
+						EPOLLOUT | EPOLLWRNORM |
+						EPOLLWRBAND);
 
 	if (msg->msg_name)
 		unix_copy_addr(msg, skb->sk);
@@ -2319,10 +2320,7 @@ static int unix_stream_read_generic(struct unix_stream_read_state *state,
 	 */
 	mutex_lock(&u->iolock);
 
-	if (flags & MSG_PEEK)
-		skip = sk_peek_offset(sk, flags);
-	else
-		skip = 0;
+	skip = max(sk_peek_offset(sk, flags), 0);
 
 	do {
 		int chunk;
@@ -2339,7 +2337,6 @@ redo:
 		last_len = last ? last->len : 0;
 again:
 		if (skb == NULL) {
-			unix_sk(sk)->recursion_level = 0;
 			if (copied >= target)
 				goto unlock;
 
@@ -2553,7 +2550,7 @@ static int unix_shutdown(struct socket *sock, int mode)
 	++mode;
 
 	unix_state_lock(sk);
-	sk->sk_shutdown |= mode;
+	WRITE_ONCE(sk->sk_shutdown, sk->sk_shutdown | mode);
 	other = unix_peer(sk);
 	if (other)
 		sock_hold(other);
@@ -2570,7 +2567,7 @@ static int unix_shutdown(struct socket *sock, int mode)
 		if (mode&SEND_SHUTDOWN)
 			peer_mode |= RCV_SHUTDOWN;
 		unix_state_lock(other);
-		other->sk_shutdown |= peer_mode;
+		WRITE_ONCE(other->sk_shutdown, other->sk_shutdown | peer_mode);
 		unix_state_unlock(other);
 		other->sk_state_change(other);
 		if (peer_mode == SHUTDOWN_MASK)
@@ -2614,6 +2611,42 @@ long unix_outq_len(struct sock *sk)
 }
 EXPORT_SYMBOL_GPL(unix_outq_len);
 
+static int unix_open_file(struct sock *sk)
+{
+	struct path path;
+	struct file *f;
+	int fd;
+
+	if (!ns_capable(sock_net(sk)->user_ns, CAP_NET_ADMIN))
+		return -EPERM;
+
+	if (!smp_load_acquire(&unix_sk(sk)->addr))
+		return -ENOENT;
+
+	path = unix_sk(sk)->path;
+	if (!path.dentry)
+		return -ENOENT;
+
+	path_get(&path);
+
+	fd = get_unused_fd_flags(O_CLOEXEC);
+	if (fd < 0)
+		goto out;
+
+	f = dentry_open(&path, O_PATH, current_cred());
+	if (IS_ERR(f)) {
+		put_unused_fd(fd);
+		fd = PTR_ERR(f);
+		goto out;
+	}
+
+	fd_install(fd, f);
+out:
+	path_put(&path);
+
+	return fd;
+}
+
 static int unix_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 {
 	struct sock *sk = sock->sk;
@@ -2632,6 +2665,9 @@ static int unix_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 		else
 			err = put_user(amount, (int __user *)arg);
 		break;
+	case SIOCUNIXFILE:
+		err = unix_open_file(sk);
+		break;
 	default:
 		err = -ENOIOCTLCMD;
 		break;
@@ -2639,75 +2675,87 @@ static int unix_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 	return err;
 }
 
-static unsigned int unix_poll(struct file *file, struct socket *sock, poll_table *wait)
+#ifdef CONFIG_COMPAT
+static int unix_compat_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
+{
+	return unix_ioctl(sock, cmd, (unsigned long)compat_ptr(arg));
+}
+#endif
+
+static __poll_t unix_poll(struct file *file, struct socket *sock, poll_table *wait)
 {
 	struct sock *sk = sock->sk;
-	unsigned int mask;
+	__poll_t mask;
+	u8 shutdown;
 
-	sock_poll_wait(file, sk_sleep(sk), wait);
+	sock_poll_wait(file, sock, wait);
 	mask = 0;
+	shutdown = READ_ONCE(sk->sk_shutdown);
 
 	/* exceptional events? */
 	if (sk->sk_err)
-		mask |= POLLERR;
-	if (sk->sk_shutdown == SHUTDOWN_MASK)
-		mask |= POLLHUP;
-	if (sk->sk_shutdown & RCV_SHUTDOWN)
-		mask |= POLLRDHUP | POLLIN | POLLRDNORM;
+		mask |= EPOLLERR;
+	if (shutdown == SHUTDOWN_MASK)
+		mask |= EPOLLHUP;
+	if (shutdown & RCV_SHUTDOWN)
+		mask |= EPOLLRDHUP | EPOLLIN | EPOLLRDNORM;
 
 	/* readable? */
-	if (!skb_queue_empty(&sk->sk_receive_queue))
-		mask |= POLLIN | POLLRDNORM;
+	if (!skb_queue_empty_lockless(&sk->sk_receive_queue))
+		mask |= EPOLLIN | EPOLLRDNORM;
 
 	/* Connection-based need to check for termination and startup */
 	if ((sk->sk_type == SOCK_STREAM || sk->sk_type == SOCK_SEQPACKET) &&
 	    sk->sk_state == TCP_CLOSE)
-		mask |= POLLHUP;
+		mask |= EPOLLHUP;
 
 	/*
 	 * we set writable also when the other side has shut down the
 	 * connection. This prevents stuck sockets.
 	 */
 	if (unix_writable(sk))
-		mask |= POLLOUT | POLLWRNORM | POLLWRBAND;
+		mask |= EPOLLOUT | EPOLLWRNORM | EPOLLWRBAND;
 
 	return mask;
 }
 
-static unsigned int unix_dgram_poll(struct file *file, struct socket *sock,
+static __poll_t unix_dgram_poll(struct file *file, struct socket *sock,
 				    poll_table *wait)
 {
 	struct sock *sk = sock->sk, *other;
-	unsigned int mask, writable;
+	unsigned int writable;
+	__poll_t mask;
+	u8 shutdown;
 
-	sock_poll_wait(file, sk_sleep(sk), wait);
+	sock_poll_wait(file, sock, wait);
 	mask = 0;
+	shutdown = READ_ONCE(sk->sk_shutdown);
 
 	/* exceptional events? */
-	if (sk->sk_err || !skb_queue_empty(&sk->sk_error_queue))
-		mask |= POLLERR |
-			(sock_flag(sk, SOCK_SELECT_ERR_QUEUE) ? POLLPRI : 0);
+	if (sk->sk_err || !skb_queue_empty_lockless(&sk->sk_error_queue))
+		mask |= EPOLLERR |
+			(sock_flag(sk, SOCK_SELECT_ERR_QUEUE) ? EPOLLPRI : 0);
 
-	if (sk->sk_shutdown & RCV_SHUTDOWN)
-		mask |= POLLRDHUP | POLLIN | POLLRDNORM;
-	if (sk->sk_shutdown == SHUTDOWN_MASK)
-		mask |= POLLHUP;
+	if (shutdown & RCV_SHUTDOWN)
+		mask |= EPOLLRDHUP | EPOLLIN | EPOLLRDNORM;
+	if (shutdown == SHUTDOWN_MASK)
+		mask |= EPOLLHUP;
 
 	/* readable? */
-	if (!skb_queue_empty(&sk->sk_receive_queue))
-		mask |= POLLIN | POLLRDNORM;
+	if (!skb_queue_empty_lockless(&sk->sk_receive_queue))
+		mask |= EPOLLIN | EPOLLRDNORM;
 
 	/* Connection-based need to check for termination and startup */
 	if (sk->sk_type == SOCK_SEQPACKET) {
 		if (sk->sk_state == TCP_CLOSE)
-			mask |= POLLHUP;
+			mask |= EPOLLHUP;
 		/* connection hasn't started yet? */
 		if (sk->sk_state == TCP_SYN_SENT)
 			return mask;
 	}
 
 	/* No write status requested, avoid expensive OUT tests. */
-	if (!(poll_requested_events(wait) & (POLLWRBAND|POLLWRNORM|POLLOUT)))
+	if (!(poll_requested_events(wait) & (EPOLLWRBAND|EPOLLWRNORM|EPOLLOUT)))
 		return mask;
 
 	writable = unix_writable(sk);
@@ -2724,7 +2772,7 @@ static unsigned int unix_dgram_poll(struct file *file, struct socket *sock,
 	}
 
 	if (writable)
-		mask |= POLLOUT | POLLWRNORM | POLLWRBAND;
+		mask |= EPOLLOUT | EPOLLWRNORM | EPOLLWRBAND;
 	else
 		sk_set_bit(SOCKWQ_ASYNC_NOSPACE, sk);
 
@@ -2822,7 +2870,7 @@ static int unix_seq_show(struct seq_file *seq, void *v)
 
 		seq_printf(seq, "%pK: %08X %08X %08X %04X %02X %5lu",
 			s,
-			atomic_read(&s->sk_refcnt),
+			refcount_read(&s->sk_refcnt),
 			0,
 			s->sk_state == TCP_LISTEN ? __SO_ACCEPTCON : 0,
 			s->sk_type,
@@ -2860,21 +2908,6 @@ static const struct seq_operations unix_seq_ops = {
 	.stop   = unix_seq_stop,
 	.show   = unix_seq_show,
 };
-
-static int unix_seq_open(struct inode *inode, struct file *file)
-{
-	return seq_open_net(inode, file, &unix_seq_ops,
-			    sizeof(struct seq_net_private));
-}
-
-static const struct file_operations unix_seq_fops = {
-	.owner		= THIS_MODULE,
-	.open		= unix_seq_open,
-	.read		= seq_read,
-	.llseek		= seq_lseek,
-	.release	= seq_release_net,
-};
-
 #endif
 
 static const struct net_proto_family unix_family_ops = {
@@ -2893,7 +2926,8 @@ static int __net_init unix_net_init(struct net *net)
 		goto out;
 
 #ifdef CONFIG_PROC_FS
-	if (!proc_create("unix", 0, net->proc_net, &unix_seq_fops)) {
+	if (!proc_create_net("unix", 0, net->proc_net, &unix_seq_ops,
+			sizeof(struct seq_net_private))) {
 		unix_sysctl_unregister(net);
 		goto out;
 	}

@@ -1153,23 +1153,23 @@ void psi_trigger_destroy(struct psi_trigger *t)
 	kfree(t);
 }
 
-unsigned int psi_trigger_poll(void **trigger_ptr, struct file *file,
-			      poll_table *wait)
+__poll_t psi_trigger_poll(void **trigger_ptr,
+				struct file *file, poll_table *wait)
 {
-	unsigned int ret = DEFAULT_POLLMASK;
+	__poll_t ret = DEFAULT_POLLMASK;
 	struct psi_trigger *t;
 
 	if (static_branch_likely(&psi_disabled))
-		return DEFAULT_POLLMASK | POLLERR | POLLPRI;
+		return DEFAULT_POLLMASK | EPOLLERR | EPOLLPRI;
 
 	t = smp_load_acquire(trigger_ptr);
 	if (!t)
-		return DEFAULT_POLLMASK | POLLERR | POLLPRI;
+		return DEFAULT_POLLMASK | EPOLLERR | EPOLLPRI;
 
 	poll_wait(file, &t->event_wait, wait);
 
 	if (cmpxchg(&t->event, 1, 0) == 1)
-		ret |= POLLPRI;
+		ret |= EPOLLPRI;
 
 	return ret;
 }
@@ -1235,7 +1235,7 @@ static ssize_t psi_cpu_write(struct file *file, const char __user *user_buf,
 	return psi_write(file, user_buf, nbytes, PSI_CPU);
 }
 
-static unsigned int psi_fop_poll(struct file *file, poll_table *wait)
+static __poll_t psi_fop_poll(struct file *file, poll_table *wait)
 {
 	struct seq_file *seq = file->private_data;
 

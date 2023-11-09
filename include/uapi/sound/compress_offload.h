@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *  compress_offload.h - compress offload header definations
  *
@@ -70,7 +71,6 @@ struct snd_compr_tstamp {
 	__u32 pcm_frames;
 	__u32 pcm_io_frames;
 	__u32 sampling_rate;
-	__u64 timestamp;
 } __attribute__((packed, aligned(4)));
 
 /**
@@ -132,14 +132,7 @@ struct snd_compr_audio_info {
 	__u32 reserved[15];
 } __attribute__((packed, aligned(4)));
 
-#define SNDRV_COMPRESS_RENDER_MODE_AUDIO_MASTER 0
-#define SNDRV_COMPRESS_RENDER_MODE_STC_MASTER 1
-#define SNDRV_COMPRESS_RENDER_MODE_TTP 2
-#define SNDRV_COMPRESS_RENDER_MODE_TTP_PASS_THROUGH 3
-#define SNDRV_COMPRESS_RENDER_MODE_ABSOLUTETIME 4
-
-#define SNDRV_COMPRESS_CLK_REC_MODE_NONE 0
-#define SNDRV_COMPRESS_CLK_REC_MODE_AUTO 1
+#define SND_COMPR_AUDIO_INFO
 
 /**
  * enum sndrv_compress_encoder
@@ -147,43 +140,11 @@ struct snd_compr_audio_info {
  * end of the track
  * @SNDRV_COMPRESS_ENCODER_DELAY: no of samples inserted by the encoder at the
  * beginning of the track
- * @SNDRV_COMPRESS_PATH_DELAY: dsp path delay in microseconds
- * @SNDRV_COMPRESS_RENDER_MODE: dsp render mode (audio master or stc)
- * @SNDRV_COMPRESS_CLK_REC_MODE: clock recovery mode ( none or auto)
- * @SNDRV_COMPRESS_RENDER_WINDOW: render window
- * @SNDRV_COMPRESS_START_DELAY: start delay
- * @SNDRV_COMPRESS_ENABLE_ADJUST_SESSION_CLOCK: enable dsp drift correction
- * @SNDRV_COMPRESS_ADJUST_SESSION_CLOCK: set drift correction value
  */
 enum sndrv_compress_encoder {
 	SNDRV_COMPRESS_ENCODER_PADDING = 1,
 	SNDRV_COMPRESS_ENCODER_DELAY = 2,
-	SNDRV_COMPRESS_MIN_BLK_SIZE = 3,
-	SNDRV_COMPRESS_MAX_BLK_SIZE = 4,
-	SNDRV_COMPRESS_PATH_DELAY = 5,
-	SNDRV_COMPRESS_RENDER_MODE = 6,
-	SNDRV_COMPRESS_CLK_REC_MODE = 7,
-	SNDRV_COMPRESS_RENDER_WINDOW = 8,
-	SNDRV_COMPRESS_START_DELAY = 9,
-	SNDRV_COMPRESS_ENABLE_ADJUST_SESSION_CLOCK = 10,
-	SNDRV_COMPRESS_ADJUST_SESSION_CLOCK = 11,
-	SNDRV_COMPRESS_LATENCY_MODE = 12,
-	SNDRV_COMPRESS_IN_TTP_OFFSET = 13,
-	SNDRV_COMPRESS_OUT_EXTERNAL_SINK_LATENCY = 14,
 };
-
-#define SNDRV_COMPRESS_PATH_DELAY SNDRV_COMPRESS_PATH_DELAY
-#define SNDRV_COMPRESS_RENDER_MODE SNDRV_COMPRESS_RENDER_MODE
-#define SNDRV_COMPRESS_CLK_REC_MODE SNDRV_COMPRESS_CLK_REC_MODE
-#define SNDRV_COMPRESS_RENDER_WINDOW SNDRV_COMPRESS_RENDER_WINDOW
-#define SNDRV_COMPRESS_START_DELAY SNDRV_COMPRESS_START_DELAY
-#define SNDRV_COMPRESS_ENABLE_ADJUST_SESSION_CLOCK \
-			SNDRV_COMPRESS_ENABLE_ADJUST_SESSION_CLOCK
-#define SNDRV_COMPRESS_ADJUST_SESSION_CLOCK SNDRV_COMPRESS_ADJUST_SESSION_CLOCK
-#define SNDRV_COMPRESS_LATENCY_MODE SNDRV_COMPRESS_LATENCY_MODE
-#define SNDRV_COMPRESS_IN_TTP_OFFSET SNDRV_COMPRESS_IN_TTP_OFFSET
-#define SNDRV_COMPRESS_OUT_EXTERNAL_SINK_LATENCY \
-		SNDRV_COMPRESS_OUT_EXTERNAL_SINK_LATENCY
 
 /**
  * struct snd_compr_metadata - compressed stream metadata
@@ -244,5 +205,4 @@ struct snd_compr_metadata {
 #define SND_COMPR_TRIGGER_DRAIN 7 /*FIXME move this to pcm.h */
 #define SND_COMPR_TRIGGER_NEXT_TRACK 8
 #define SND_COMPR_TRIGGER_PARTIAL_DRAIN 9
-#define SNDRV_COMPRESS_DSP_POSITION 10
 #endif

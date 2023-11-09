@@ -13,34 +13,31 @@
 
 #include <linux/device.h>
 #include <linux/module.h>
+#include <linux/mod_devicetable.h>
 #include <linux/io.h>
 #include <linux/nvmem-provider.h>
 #include <linux/platform_device.h>
 
+struct qfprom_priv {
+	void __iomem *base;
+};
+
 static int qfprom_reg_read(void *context,
 			unsigned int reg, void *_val, size_t bytes)
 {
-	void __iomem *base = context;
-	u32 *val = _val;
-	int i = 0, words = bytes / 4;
+	struct qfprom_priv *priv = context;
+	u8 *val = _val;
+	int i = 0, words = bytes;
 
 	while (words--)
-		*val++ = readl(base + reg + (i++ * 4));
+		*val++ = readb(priv->base + reg + i++);
 
 	return 0;
 }
 
-static int qfprom_remove(struct platform_device *pdev)
-{
-	struct nvmem_device *nvmem = platform_get_drvdata(pdev);
-
-	return nvmem_unregister(nvmem);
-}
-
 static struct nvmem_config econfig = {
 	.name = "qfprom",
-	.owner = THIS_MODULE,
-	.stride = 4,
+	.stride = 1,
 	.word_size = 1,
 	.reg_read = qfprom_reg_read,
 };
@@ -50,24 +47,24 @@ static int qfprom_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct resource *res;
 	struct nvmem_device *nvmem;
-	void __iomem *base;
+	struct qfprom_priv *priv;
+
+	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
+	if (!priv)
+		return -ENOMEM;
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	base = devm_ioremap_resource(dev, res);
-	if (IS_ERR(base))
-		return PTR_ERR(base);
+	priv->base = devm_ioremap_resource(dev, res);
+	if (IS_ERR(priv->base))
+		return PTR_ERR(priv->base);
 
 	econfig.size = resource_size(res);
 	econfig.dev = dev;
-	econfig.priv = base;
+	econfig.priv = priv;
 
-	nvmem = nvmem_register(&econfig);
-	if (IS_ERR(nvmem))
-		return PTR_ERR(nvmem);
+	nvmem = devm_nvmem_register(dev, &econfig);
 
-	platform_set_drvdata(pdev, nvmem);
-
-	return 0;
+	return PTR_ERR_OR_ZERO(nvmem);
 }
 
 static const struct of_device_id qfprom_of_match[] = {
@@ -78,32 +75,12 @@ MODULE_DEVICE_TABLE(of, qfprom_of_match);
 
 static struct platform_driver qfprom_driver = {
 	.probe = qfprom_probe,
-	.remove = qfprom_remove,
 	.driver = {
 		.name = "qcom,qfprom",
 		.of_match_table = qfprom_of_match,
 	},
 };
-
-static int __init qfprom_init(void)
-{
-	int ret;
-
-	ret = platform_driver_register(&qfprom_driver);
-	if (ret != 0)
-		pr_err("Failed to register qfprom driver\n");
-
-	return ret;
-}
-
-static void __exit qfprom_exit(void)
-{
-	return platform_driver_unregister(&qfprom_driver);
-}
-
-subsys_initcall(qfprom_init);
-module_exit(qfprom_exit);
-
+module_platform_driver(qfprom_driver);
 MODULE_AUTHOR("Srinivas Kandagatla <srinivas.kandagatla@linaro.org>");
 MODULE_DESCRIPTION("Qualcomm QFPROM driver");
 MODULE_LICENSE("GPL v2");

@@ -98,8 +98,6 @@ static int chameleon_parse_gdd(struct mcb_bus *bus,
 	mdev->mem.end = mdev->mem.start + size - 1;
 	mdev->mem.flags = IORESOURCE_MEM;
 
-	mdev->is_added = false;
-
 	ret = mcb_device_register(bus, mdev);
 	if (ret < 0)
 		goto err;
@@ -149,7 +147,7 @@ static int chameleon_get_bar(char __iomem **base, phys_addr_t mapbase,
 		reg = readl(*base);
 
 		bar_count = BAR_CNT(reg);
-		if (bar_count <= 0 && bar_count > CHAMELEON_BAR_MAX)
+		if (bar_count <= 0 || bar_count > CHAMELEON_BAR_MAX)
 			return -ENODEV;
 
 		c = kcalloc(bar_count, sizeof(struct chameleon_bar),
@@ -182,7 +180,7 @@ int chameleon_parse_cells(struct mcb_bus *bus, phys_addr_t mapbase,
 	int num_cells = 0;
 	uint32_t dtype;
 	int bar_count;
-	int ret = 0;
+	int ret;
 	u32 hsize;
 
 	hsize = sizeof(struct chameleon_fpga_header);
@@ -210,8 +208,10 @@ int chameleon_parse_cells(struct mcb_bus *bus, phys_addr_t mapbase,
 		 header->filename);
 
 	bar_count = chameleon_get_bar(&p, mapbase, &cb);
-	if (bar_count < 0)
+	if (bar_count < 0) {
+		ret = bar_count;
 		goto free_header;
+	}
 
 	for_each_chameleon_cell(dtype, p) {
 		switch (dtype) {

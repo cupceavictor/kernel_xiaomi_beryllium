@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _ALPHA_SPINLOCK_H
 #define _ALPHA_SPINLOCK_H
 
@@ -52,16 +53,6 @@ static inline int arch_spin_trylock(arch_spinlock_t *lock)
 }
 
 /***********************************************************/
-
-static inline int arch_read_can_lock(arch_rwlock_t *lock)
-{
-	return (lock->lock & 1) == 0;
-}
-
-static inline int arch_write_can_lock(arch_rwlock_t *lock)
-{
-	return lock->lock == 0;
-}
 
 static inline void arch_read_lock(arch_rwlock_t *lock)
 {

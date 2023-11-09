@@ -14,7 +14,7 @@
  * GNU General Public License for more details.
  */
 
-#include <linux/extcon.h>
+#include <linux/extcon-provider.h>
 #include <linux/gpio.h>
 #include <linux/gpio/consumer.h>
 #include <linux/init.h>
@@ -26,8 +26,7 @@
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 #include <linux/workqueue.h>
-#include <linux/acpi.h>
-#include <linux/delay.h>
+#include <linux/pinctrl/consumer.h>
 
 #define USB_GPIO_DEBOUNCE_MS	20	/* ms */
 
@@ -37,7 +36,6 @@ struct usb_extcon_info {
 
 	struct gpio_desc *id_gpiod;
 	struct gpio_desc *vbus_gpiod;
-	struct gpio_desc *trig_gpiod;
 	int id_irq;
 	int vbus_irq;
 
@@ -67,7 +65,7 @@ static const unsigned int usb_extcon_cable[] = {
  * In case we have only one of these signals:
  * - VBUS only - we want to distinguish between [1] and [2], so ID is always 1.
  * - ID only - we want to distinguish between [1] and [4], so VBUS = ID.
- */
+*/
 static void usb_extcon_detect_cable(struct work_struct *work)
 {
 	int id, vbus;
@@ -89,12 +87,6 @@ static void usb_extcon_detect_cable(struct work_struct *work)
 
 	if (!id) {
 		extcon_set_state_sync(info->edev, EXTCON_USB_HOST, true);
-		if (info->trig_gpiod) {
-			gpiod_set_value(info->trig_gpiod, 1);
-			msleep(20);
-			gpiod_set_value(info->trig_gpiod, 0);
-			msleep(20);
-		}
 	} else {
 		if (vbus)
 			extcon_set_state_sync(info->edev, EXTCON_USB, true);
@@ -118,7 +110,7 @@ static int usb_extcon_probe(struct platform_device *pdev)
 	struct usb_extcon_info *info;
 	int ret;
 
-	if (!np && !ACPI_HANDLE(dev))
+	if (!np)
 		return -EINVAL;
 
 	info = devm_kzalloc(&pdev->dev, sizeof(*info), GFP_KERNEL);
@@ -129,8 +121,6 @@ static int usb_extcon_probe(struct platform_device *pdev)
 	info->id_gpiod = devm_gpiod_get_optional(&pdev->dev, "id", GPIOD_IN);
 	info->vbus_gpiod = devm_gpiod_get_optional(&pdev->dev, "vbus",
 						   GPIOD_IN);
-	info->trig_gpiod = devm_gpiod_get_optional(&pdev->dev, "trig",
-						   GPIOD_OUT_LOW);
 
 	if (!info->id_gpiod && !info->vbus_gpiod) {
 		dev_err(dev, "failed to get gpios\n");
@@ -142,9 +132,6 @@ static int usb_extcon_probe(struct platform_device *pdev)
 
 	if (IS_ERR(info->vbus_gpiod))
 		return PTR_ERR(info->vbus_gpiod);
-
-	if (IS_ERR(info->trig_gpiod))
-		return PTR_ERR(info->trig_gpiod);
 
 	info->edev = devm_extcon_dev_allocate(dev, usb_extcon_cable);
 	if (IS_ERR(info->edev)) {
@@ -180,8 +167,7 @@ static int usb_extcon_probe(struct platform_device *pdev)
 		ret = devm_request_threaded_irq(dev, info->id_irq, NULL,
 						usb_irq_handler,
 						IRQF_TRIGGER_RISING |
-						IRQF_TRIGGER_FALLING |
-						IRQF_ONESHOT,
+						IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
 						pdev->name, info);
 		if (ret < 0) {
 			dev_err(dev, "failed to request handler for ID IRQ\n");
@@ -199,8 +185,7 @@ static int usb_extcon_probe(struct platform_device *pdev)
 		ret = devm_request_threaded_irq(dev, info->vbus_irq, NULL,
 						usb_irq_handler,
 						IRQF_TRIGGER_RISING |
-						IRQF_TRIGGER_FALLING |
-						IRQF_ONESHOT,
+						IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
 						pdev->name, info);
 		if (ret < 0) {
 			dev_err(dev, "failed to request handler for VBUS IRQ\n");
@@ -209,15 +194,10 @@ static int usb_extcon_probe(struct platform_device *pdev)
 	}
 
 	platform_set_drvdata(pdev, info);
-	device_init_wakeup(dev, true);
+	device_set_wakeup_capable(&pdev->dev, true);
 
-	if (info->trig_gpiod)
-		/* Schedule with delay to reset ethernet bridge */
-		queue_delayed_work(system_power_efficient_wq,
-			&info->wq_detcable, msecs_to_jiffies(1500));
-	else
-		/* Perform initial detection */
-		usb_extcon_detect_cable(&info->wq_detcable.work);
+	/* Perform initial detection */
+	usb_extcon_detect_cable(&info->wq_detcable.work);
 
 	return 0;
 }
@@ -265,6 +245,9 @@ static int usb_extcon_suspend(struct device *dev)
 	if (info->vbus_gpiod)
 		disable_irq(info->vbus_irq);
 
+	if (!device_may_wakeup(dev))
+		pinctrl_pm_select_sleep_state(dev);
+
 	return ret;
 }
 
@@ -272,6 +255,9 @@ static int usb_extcon_resume(struct device *dev)
 {
 	struct usb_extcon_info *info = dev_get_drvdata(dev);
 	int ret = 0;
+
+	if (!device_may_wakeup(dev))
+		pinctrl_pm_select_default_state(dev);
 
 	if (device_may_wakeup(dev)) {
 		if (info->id_gpiod) {

@@ -1,10 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) 1992, 1998-2006 Linus Torvalds, Ingo Molnar
  * Copyright (C) 2005-2006, Thomas Gleixner, Russell King
  *
- * This file contains the interrupt descriptor management code
- *
- * Detailed information is available in Documentation/DocBook/genericirq
+ * This file contains the interrupt descriptor management code. Detailed
+ * information is available in Documentation/core-api/genericirq.rst
  *
  */
 #include <linux/irq.h>
@@ -16,7 +16,6 @@
 #include <linux/bitmap.h>
 #include <linux/irqdomain.h>
 #include <linux/sysfs.h>
-#include <linux/wakeup_reason.h>
 
 #include "internals.h"
 
@@ -28,7 +27,7 @@ static struct lock_class_key irq_desc_lock_class;
 #if defined(CONFIG_SMP)
 static int __init irq_affinity_setup(char *str)
 {
-	zalloc_cpumask_var(&irq_default_affinity, GFP_NOWAIT);
+	alloc_bootmem_cpumask_var(&irq_default_affinity);
 	cpulist_parse(str, irq_default_affinity);
 	/*
 	 * Set at least the boot cpu. We don't want to end up with
@@ -41,10 +40,8 @@ __setup("irqaffinity=", irq_affinity_setup);
 
 static void __init init_irq_default_affinity(void)
 {
-#ifdef CONFIG_CPUMASK_OFFSTACK
-	if (!irq_default_affinity)
+	if (!cpumask_available(irq_default_affinity))
 		zalloc_cpumask_var(&irq_default_affinity, GFP_NOWAIT);
-#endif
 	if (cpumask_empty(irq_default_affinity))
 		cpumask_setall(irq_default_affinity);
 }
@@ -55,14 +52,25 @@ static void __init init_irq_default_affinity(void)
 #endif
 
 #ifdef CONFIG_SMP
-static int alloc_masks(struct irq_desc *desc, gfp_t gfp, int node)
+static int alloc_masks(struct irq_desc *desc, int node)
 {
 	if (!zalloc_cpumask_var_node(&desc->irq_common_data.affinity,
-				     gfp, node))
+				     GFP_KERNEL, node))
 		return -ENOMEM;
 
+#ifdef CONFIG_GENERIC_IRQ_EFFECTIVE_AFF_MASK
+	if (!zalloc_cpumask_var_node(&desc->irq_common_data.effective_affinity,
+				     GFP_KERNEL, node)) {
+		free_cpumask_var(desc->irq_common_data.affinity);
+		return -ENOMEM;
+	}
+#endif
+
 #ifdef CONFIG_GENERIC_PENDING_IRQ
-	if (!zalloc_cpumask_var_node(&desc->pending_mask, gfp, node)) {
+	if (!zalloc_cpumask_var_node(&desc->pending_mask, GFP_KERNEL, node)) {
+#ifdef CONFIG_GENERIC_IRQ_EFFECTIVE_AFF_MASK
+		free_cpumask_var(desc->irq_common_data.effective_affinity);
+#endif
 		free_cpumask_var(desc->irq_common_data.affinity);
 		return -ENOMEM;
 	}
@@ -87,7 +95,7 @@ static void desc_smp_init(struct irq_desc *desc, int node,
 
 #else
 static inline int
-alloc_masks(struct irq_desc *desc, gfp_t gfp, int node) { return 0; }
+alloc_masks(struct irq_desc *desc, int node) { return 0; }
 static inline void
 desc_smp_init(struct irq_desc *desc, int node, const struct cpumask *affinity) { }
 #endif
@@ -106,6 +114,7 @@ static void desc_set_defaults(unsigned int irq, struct irq_desc *desc, int node,
 	desc->irq_data.chip_data = NULL;
 	irq_settings_clr_and_set(desc, ~0, _IRQ_DEFAULT_INIT_FLAGS);
 	irqd_set(&desc->irq_data, IRQD_IRQ_DISABLED);
+	irqd_set(&desc->irq_data, IRQD_IRQ_MASKED);
 	desc->handle_irq = handle_bad_irq;
 	desc->depth = 1;
 	desc->irq_count = 0;
@@ -202,6 +211,22 @@ static ssize_t type_show(struct kobject *kobj,
 }
 IRQ_ATTR_RO(type);
 
+static ssize_t wakeup_show(struct kobject *kobj,
+			   struct kobj_attribute *attr, char *buf)
+{
+	struct irq_desc *desc = container_of(kobj, struct irq_desc, kobj);
+	ssize_t ret = 0;
+
+	raw_spin_lock_irq(&desc->lock);
+	ret = sprintf(buf, "%s\n",
+		      irqd_is_wakeup_set(&desc->irq_data) ? "enabled" : "disabled");
+	raw_spin_unlock_irq(&desc->lock);
+
+	return ret;
+
+}
+IRQ_ATTR_RO(wakeup);
+
 static ssize_t name_show(struct kobject *kobj,
 			 struct kobj_attribute *attr, char *buf)
 {
@@ -245,6 +270,7 @@ static struct attribute *irq_attrs[] = {
 	&chip_name_attr.attr,
 	&hwirq_attr.attr,
 	&type_attr.attr,
+	&wakeup_attr.attr,
 	&name_attr.attr,
 	&actions_attr.attr,
 	NULL
@@ -339,6 +365,9 @@ static void free_masks(struct irq_desc *desc)
 	free_cpumask_var(desc->pending_mask);
 #endif
 	free_cpumask_var(desc->irq_common_data.affinity);
+#ifdef CONFIG_GENERIC_IRQ_EFFECTIVE_AFF_MASK
+	free_cpumask_var(desc->irq_common_data.effective_affinity);
+#endif
 }
 #else
 static inline void free_masks(struct irq_desc *desc) { }
@@ -359,9 +388,8 @@ static struct irq_desc *alloc_desc(int irq, int node, unsigned int flags,
 				   struct module *owner)
 {
 	struct irq_desc *desc;
-	gfp_t gfp = GFP_KERNEL;
 
-	desc = kzalloc_node(sizeof(*desc), gfp, node);
+	desc = kzalloc_node(sizeof(*desc), GFP_KERNEL, node);
 	if (!desc)
 		return NULL;
 	/* allocate based on nr_cpu_ids */
@@ -369,12 +397,14 @@ static struct irq_desc *alloc_desc(int irq, int node, unsigned int flags,
 	if (!desc->kstat_irqs)
 		goto err_desc;
 
-	if (alloc_masks(desc, gfp, node))
+	if (alloc_masks(desc, node))
 		goto err_kstat;
 
 	raw_spin_lock_init(&desc->lock);
 	lockdep_set_class(&desc->lock, &irq_desc_lock_class);
+	mutex_init(&desc->request_mutex);
 	init_rcu_head(&desc->rcu);
+	init_waitqueue_head(&desc->wait_for_threads);
 
 	desc_set_defaults(irq, desc, node, affinity, owner);
 	irqd_set(&desc->irq_data, flags);
@@ -409,6 +439,7 @@ static void free_desc(unsigned int irq)
 {
 	struct irq_desc *desc = irq_to_desc(irq);
 
+	irq_remove_debugfs_entry(desc);
 	unregister_irq_proc(irq, desc);
 
 	/*
@@ -427,6 +458,7 @@ static void free_desc(unsigned int irq)
 	 * We free the descriptor, masks and stat fields via RCU. That
 	 * allows demultiplex interrupts to do rcu based management of
 	 * the child interrupts.
+	 * This also allows us to use rcu in kstat_irqs_usr().
 	 */
 	call_rcu(&desc->rcu, delayed_free_desc);
 }
@@ -447,7 +479,7 @@ static int alloc_descs(unsigned int start, unsigned int cnt, int node,
 		}
 	}
 
-	flags = affinity ? IRQD_AFFINITY_MANAGED : 0;
+	flags = affinity ? IRQD_AFFINITY_MANAGED | IRQD_MANAGED_SHUTDOWN : 0;
 	mask = NULL;
 
 	for (i = 0; i < cnt; i++) {
@@ -461,6 +493,7 @@ static int alloc_descs(unsigned int start, unsigned int cnt, int node,
 			goto err;
 		irq_insert_desc(start + i, desc);
 		irq_sysfs_add(start + i, desc);
+		irq_add_debugfs_entry(start + i, desc);
 	}
 	bitmap_set(allocated_irqs, start, cnt);
 	return start;
@@ -488,7 +521,8 @@ int __init early_irq_init(void)
 
 	/* Let arch update nr_irqs and return the nr of preallocated irqs */
 	initcnt = arch_probe_nr_irqs();
-	printk(KERN_INFO "NR_IRQS:%d nr_irqs:%d %d\n", NR_IRQS, nr_irqs, initcnt);
+	printk(KERN_INFO "NR_IRQS: %d, nr_irqs: %d, preallocated irqs: %d\n",
+	       NR_IRQS, nr_irqs, initcnt);
 
 	if (WARN_ON(nr_irqs > IRQ_BITMAP_BITS))
 		nr_irqs = IRQ_BITMAP_BITS;
@@ -524,16 +558,18 @@ int __init early_irq_init(void)
 
 	init_irq_default_affinity();
 
-	printk(KERN_INFO "NR_IRQS:%d\n", NR_IRQS);
+	printk(KERN_INFO "NR_IRQS: %d\n", NR_IRQS);
 
 	desc = irq_desc;
 	count = ARRAY_SIZE(irq_desc);
 
 	for (i = 0; i < count; i++) {
 		desc[i].kstat_irqs = alloc_percpu(unsigned int);
-		alloc_masks(&desc[i], GFP_KERNEL, node);
+		alloc_masks(&desc[i], node);
 		raw_spin_lock_init(&desc[i].lock);
 		lockdep_set_class(&desc[i].lock, &irq_desc_lock_class);
+		mutex_init(&desc[i].request_mutex);
+		init_waitqueue_head(&desc[i].wait_for_threads);
 		desc_set_defaults(i, &desc[i], node, NULL, NULL);
 	}
 	return arch_early_irq_init();
@@ -594,25 +630,16 @@ void irq_init_desc(unsigned int irq)
 /**
  * generic_handle_irq - Invoke the handler for a particular irq
  * @irq:	The irq number to handle
- * returns:
- * 	negative on error
- *	0 when the interrupt handler was not called
- *	1 when the interrupt handler was called
+ *
  */
-
 int generic_handle_irq(unsigned int irq)
 {
 	struct irq_desc *desc = irq_to_desc(irq);
 
 	if (!desc)
 		return -EINVAL;
-
-	if (unlikely(logging_wakeup_reasons_nosync()))
-		return log_possible_wakeup_reason(irq,
-				desc,
-				generic_handle_irq_desc);
-
-	return generic_handle_irq_desc(desc);
+	generic_handle_irq_desc(desc);
+	return 0;
 }
 EXPORT_SYMBOL_GPL(generic_handle_irq);
 
@@ -870,6 +897,7 @@ int irq_get_percpu_devid_partition(unsigned int irq, struct cpumask *affinity)
 
 	return 0;
 }
+EXPORT_SYMBOL_GPL(irq_get_percpu_devid_partition);
 
 void kstat_incr_irq_this_cpu(unsigned int irq)
 {
@@ -922,17 +950,18 @@ unsigned int kstat_irqs(unsigned int irq)
  * kstat_irqs_usr - Get the statistics for an interrupt
  * @irq:	The interrupt number
  *
- * Returns the sum of interrupt counts on all cpus since boot for
- * @irq. Contrary to kstat_irqs() this can be called from any
- * preemptible context. It's protected against concurrent removal of
- * an interrupt descriptor when sparse irqs are enabled.
+ * Returns the sum of interrupt counts on all cpus since boot for @irq.
+ * Contrary to kstat_irqs() this can be called from any context.
+ * It uses rcu since a concurrent removal of an interrupt descriptor is
+ * observing an rcu grace period before delayed_free_desc()/irq_kobj_release().
  */
 unsigned int kstat_irqs_usr(unsigned int irq)
 {
 	unsigned int sum;
 
-	irq_lock_sparse();
+	rcu_read_lock();
 	sum = kstat_irqs(irq);
-	irq_unlock_sparse();
+	rcu_read_unlock();
 	return sum;
 }
+EXPORT_SYMBOL_GPL(kstat_irqs_usr);

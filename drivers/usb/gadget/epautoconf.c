@@ -1,12 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * epautoconf.c -- endpoint autoconfiguration for usb gadget drivers
  *
  * Copyright (C) 2004 David Brownell
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 #include <linux/kernel.h>
@@ -211,7 +207,7 @@ void usb_ep_autoconfig_reset (struct usb_gadget *gadget)
 EXPORT_SYMBOL_GPL(usb_ep_autoconfig_reset);
 
 /**
- * usb_ep_autoconfig_by_name - Used to pick the endpoint by name. eg gsi-epin14
+ * usb_ep_autoconfig_by_name - Used to pick the endpoint by name. eg gsi-epin1
  * @gadget: The device to which the endpoint must belong.
  * @desc: Endpoint descriptor, with endpoint direction and transfer mode
  *	initialized.
@@ -251,4 +247,4 @@ err:
 	pr_err("%s:error finding ep %s\n", __func__, ep_name);
 	return NULL;
 }
-EXPORT_SYMBOL(usb_ep_autoconfig_by_name);
+EXPORT_SYMBOL_GPL(usb_ep_autoconfig_by_name);

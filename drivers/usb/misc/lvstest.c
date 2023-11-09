@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * drivers/usb/misc/lvstest.c
  *
@@ -5,10 +6,6 @@
  *
  * Copyright (C) 2014 ST Microelectronics
  * Pratyush Anand <pratyush.anand@gmail.com>
- *
- * This file is licensed under the terms of the GNU General Public
- * License version 2. This program is licensed "as is" without any
- * warranty of any kind, whether express or implied.
  */
 
 #include <linux/init.h>
@@ -184,13 +181,10 @@ static ssize_t warm_reset_store(struct device *dev,
 	struct usb_interface *intf = to_usb_interface(dev);
 	struct usb_device *hdev = interface_to_usbdev(intf);
 	struct lvs_rh *lvs = usb_get_intfdata(intf);
-	int port;
 	int ret;
 
-	if (kstrtoint(buf, 0, &port) || port < 1 || port > 255)
-		port = lvs->portnum;
-
-	ret = lvs_rh_set_port_feature(hdev, port, USB_PORT_FEAT_BH_PORT_RESET);
+	ret = lvs_rh_set_port_feature(hdev, lvs->portnum,
+			USB_PORT_FEAT_BH_PORT_RESET);
 	if (ret < 0) {
 		dev_err(dev, "can't issue warm reset %d\n", ret);
 		return ret;
@@ -215,7 +209,7 @@ static ssize_t u2_timeout_store(struct device *dev,
 		return ret;
 	}
 
-	if (val < 0 || val > 127)
+	if (val > 127)
 		return -EINVAL;
 
 	ret = lvs_rh_set_port_feature(hdev, lvs->portnum | (val << 8),
@@ -244,7 +238,7 @@ static ssize_t u1_timeout_store(struct device *dev,
 		return ret;
 	}
 
-	if (val < 0 || val > 127)
+	if (val > 127)
 		return -EINVAL;
 
 	ret = lvs_rh_set_port_feature(hdev, lvs->portnum | (val << 8),
@@ -302,14 +296,10 @@ static ssize_t enable_compliance_store(struct device *dev,
 	struct usb_interface *intf = to_usb_interface(dev);
 	struct usb_device *hdev = interface_to_usbdev(intf);
 	struct lvs_rh *lvs = usb_get_intfdata(intf);
-	int port;
 	int ret;
 
-	if (kstrtoint(buf, 0, &port) || port < 1 || port > 255)
-		port = lvs->portnum;
-
 	ret = lvs_rh_set_port_feature(hdev,
-			port | (USB_SS_PORT_LS_COMP_MOD << 3),
+			lvs->portnum | USB_SS_PORT_LS_COMP_MOD << 3,
 			USB_PORT_FEAT_LINK_STATE);
 	if (ret < 0) {
 		dev_err(dev, "can't enable compliance mode %d\n", ret);
@@ -415,10 +405,9 @@ static int lvs_rh_probe(struct usb_interface *intf,
 	hdev = interface_to_usbdev(intf);
 	desc = intf->cur_altsetting;
 
-	if (desc->desc.bNumEndpoints < 1)
-		return -ENODEV;
-
-	endpoint = &desc->endpoint[0].desc;
+	ret = usb_find_int_in_endpoint(desc, &endpoint);
+	if (ret)
+		return ret;
 
 	/* valid only for SS root hub */
 	if (hdev->descriptor.bDeviceProtocol != USB_HUB_PR_SS || hdev->parent) {

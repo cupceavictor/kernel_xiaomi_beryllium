@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * composite.h -- framework for usb gadgets which are composite devices
  *
@@ -40,13 +41,6 @@
 #include <linux/usb/gadget.h>
 #include <linux/log2.h>
 #include <linux/configfs.h>
-
-/* FUNCTION_SUSPEND: suspend options from usb 3.0 spec Table 9-7 */
-#define FUNC_SUSPEND_OPT_SUSP_MASK BIT(0)
-#define FUNC_SUSPEND_OPT_RW_EN_MASK BIT(1)
-
-#define FUNC_WAKEUP_CAPABLE_SHIFT  0
-#define FUNC_WAKEUP_ENABLE_SHIFT   1
 
 /*
  * USB function drivers should return USB_GADGET_DELAYED_STATUS if they
@@ -169,7 +163,7 @@ struct usb_os_desc_table {
  * @get_status: Returns function status as a reply to
  *	GetStatus() request when the recipient is Interface.
  * @func_suspend: callback to be called when
- *	SetFeature(FUNCTION_SUSPEND) is received
+ *	SetFeature(FUNCTION_SUSPEND) is reseived
  * @func_is_suspended: Tells whether the function is currently in
  *	Function Suspend state (used in Super Speed mode only).
  * @func_wakeup_allowed: Tells whether Function Remote Wakeup has been allowed
@@ -353,10 +347,6 @@ struct usb_configuration {
 	unsigned		fullspeed:1;
 	unsigned		superspeed_plus:1;
 	struct usb_function	*interface[MAX_CONFIG_INTERFACES];
-
-	/* number of in and out eps used in this configuration */
-	int			num_ineps_used;
-	int			num_outeps_used;
 };
 
 int usb_add_config(struct usb_composite_dev *,
@@ -483,6 +473,7 @@ static inline struct usb_composite_driver *to_cdriver(
  * sure doing that won't hurt too much.
  *
  * One notion for how to handle Wireless USB devices involves:
+ *
  * (a) a second gadget here, discovery mechanism TBD, but likely
  *     needing separate "register/unregister WUSB gadget" calls;
  * (b) updates to usb_gadget to include flags "is it wireless",
@@ -535,8 +526,9 @@ struct usb_composite_dev {
 	/* protects deactivations and delayed_status counts*/
 	spinlock_t			lock;
 
-	unsigned			setup_pending:1;
-	unsigned			os_desc_pending:1;
+	/* public: */
+	unsigned int			setup_pending:1;
+	unsigned int			os_desc_pending:1;
 };
 
 extern int usb_string_id(struct usb_composite_dev *c);
@@ -591,9 +583,6 @@ struct usb_composite_overwrite {
 
 void usb_composite_overwrite_options(struct usb_composite_dev *cdev,
 		struct usb_composite_overwrite *covr);
-
-int composite_dev_prepare(struct usb_composite_driver *composite,
-		struct usb_composite_dev *dev);
 
 static inline u16 get_default_bcdDevice(void)
 {

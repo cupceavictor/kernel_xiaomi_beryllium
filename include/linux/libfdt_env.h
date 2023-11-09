@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef LIBFDT_ENV_H
 #define LIBFDT_ENV_H
 

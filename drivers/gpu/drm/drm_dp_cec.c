@@ -113,7 +113,7 @@ static int drm_dp_cec_adap_transmit(struct cec_adapter *adap, u8 attempts,
 				    u32 signal_free_time, struct cec_msg *msg)
 {
 	struct drm_dp_aux *aux = cec_get_drvdata(adap);
-	unsigned int retries = min(2, attempts - 1);
+	unsigned int retries = min(5, attempts - 1);
 	ssize_t err;
 
 	err = drm_dp_dpcd_write(aux, DP_CEC_TX_MESSAGE_BUFFER,
@@ -157,7 +157,7 @@ static void drm_dp_cec_adap_status(struct cec_adapter *adap,
 
 	if (drm_dp_read_desc(aux, &desc, true))
 		return;
-	seq_printf(file, "OUI: %*pdH\n",
+	seq_printf(file, "OUI: %*phD\n",
 		   (int)sizeof(id->oui), id->oui);
 	seq_printf(file, "ID: %*pE\n",
 		   (int)strnlen(id->device_id, sizeof(id->device_id)),
@@ -289,7 +289,7 @@ static void drm_dp_cec_unregister_work(struct work_struct *work)
  */
 void drm_dp_cec_set_edid(struct drm_dp_aux *aux, const struct edid *edid)
 {
-	u32 cec_caps = CEC_CAP_DEFAULTS;
+	u32 cec_caps = CEC_CAP_DEFAULTS | CEC_CAP_NEEDS_HPD;
 	unsigned int num_las = 1;
 	u8 cap;
 
@@ -335,12 +335,12 @@ void drm_dp_cec_set_edid(struct drm_dp_aux *aux, const struct edid *edid)
 	/* Create a new adapter */
 	aux->cec.adap = cec_allocate_adapter(&drm_dp_cec_adap_ops,
 					     aux, aux->cec.name, cec_caps,
-					     num_las, aux->cec.parent);
+					     num_las);
 	if (IS_ERR(aux->cec.adap)) {
 		aux->cec.adap = NULL;
 		goto unlock;
 	}
-	if (cec_register_adapter(aux->cec.adap)) {
+	if (cec_register_adapter(aux->cec.adap, aux->cec.parent)) {
 		cec_delete_adapter(aux->cec.adap);
 		aux->cec.adap = NULL;
 	} else {
@@ -403,10 +403,7 @@ EXPORT_SYMBOL(drm_dp_cec_unset_edid);
 void drm_dp_cec_register_connector(struct drm_dp_aux *aux, const char *name,
 				   struct device *parent)
 {
-	if (aux->cec.adap) {
-		WARN_ON(aux->cec.adap);
-		return;
-	}
+	WARN_ON(aux->cec.adap);
 	aux->cec.name = name;
 	aux->cec.parent = parent;
 	INIT_DELAYED_WORK(&aux->cec.unregister_work,

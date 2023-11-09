@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014-2016 Qualcomm Atheros, Inc.
+ * Copyright (c) 2014-2017 Qualcomm Atheros, Inc.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -29,6 +29,7 @@ enum wil_platform_event {
 
 enum wil_platform_features {
 	WIL_PLATFORM_FEATURE_FW_EXT_CLK_CONTROL = 0,
+	WIL_PLATFORM_FEATURE_TRIPLE_MSI = 1,
 	WIL_PLATFORM_FEATURE_MAX,
 };
 

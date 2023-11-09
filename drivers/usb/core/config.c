@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Released under the GPLv2 only.
+ */
+
 #include <linux/usb.h>
 #include <linux/usb/ch9.h>
 #include <linux/usb/hcd.h>
@@ -1083,7 +1088,7 @@ int usb_get_bos_descriptor(struct usb_device *dev)
 				(struct usb_ptm_cap_descriptor *)buffer;
 			break;
 		case USB_CAP_TYPE_CONFIG_SUMMARY:
-			/* one such desc per configuration */
+			/* one such desc per function */
 			if (!dev->bos->num_config_summary_desc)
 				dev->bos->config_summary =
 				(struct usb_config_summary_descriptor *)buffer;

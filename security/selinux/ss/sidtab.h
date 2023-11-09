@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * A security identifier table (sidtab) is a lookup table
  * of security context structures indexed by SID value.
@@ -15,7 +16,6 @@
 #include <linux/hashtable.h>
 
 #include "context.h"
-#include "flask.h"
 
 struct sidtab_entry_leaf {
 	u32 sid;

@@ -1,7 +1,7 @@
 /*
  * Implementation of the security services.
  *
- * Authors : Stephen Smalley, <sds@epoch.ncsc.mil>
+ * Authors : Stephen Smalley, <sds@tycho.nsa.gov>
  *	     James Morris <jmorris@redhat.com>
  *
  * Updated: Trusted Computer Solutions, Inc. <dgoeddel@trustedcs.com>
@@ -74,9 +74,9 @@
 const char *selinux_policycap_names[__POLICYDB_CAPABILITY_MAX] = {
 	"network_peer_controls",
 	"open_perms",
-	"compat1",
+	"extended_socket_class",
 	"always_check_network",
-	"compat2",
+	"cgroup_seclabel",
 	"nnp_nosuid_transition"
 };
 
@@ -499,7 +499,7 @@ static void security_dump_masked_av(struct policydb *policydb,
 		goto out;
 
 	/* audit a message */
-	ab = audit_log_start(current->audit_context,
+	ab = audit_log_start(audit_context(),
 			     GFP_ATOMIC, AUDIT_SELINUX_ERR);
 	if (!ab)
 		goto out;
@@ -741,7 +741,7 @@ static int security_validtrans_handle_fail(struct selinux_state *state,
 		goto out;
 	if (context_struct_to_string(p, tcontext, &t, &tlen))
 		goto out;
-	audit_log(current->audit_context, GFP_ATOMIC, AUDIT_SELINUX_ERR,
+	audit_log(audit_context(), GFP_ATOMIC, AUDIT_SELINUX_ERR,
 		  "op=security_validate_transition seresult=denied"
 		  " oldcontext=%s newcontext=%s taskcontext=%s tclass=%s",
 		  o, n, t, sym_name(p, SYM_CLASSES, tclass-1));
@@ -927,7 +927,7 @@ int security_bounded_transition(struct selinux_state *state,
 					      &old_name, &length) &&
 		    !context_struct_to_string(policydb, new_context,
 					      &new_name, &length)) {
-			audit_log(current->audit_context,
+			audit_log(audit_context(),
 				  GFP_ATOMIC, AUDIT_SELINUX_ERR,
 				  "op=security_bounded_transition "
 				  "seresult=denied "
@@ -1275,6 +1275,12 @@ static int context_struct_to_string(struct policydb *p,
 int security_sidtab_hash_stats(struct selinux_state *state, char *page)
 {
 	int rc;
+
+	if (!state->initialized) {
+		pr_err("SELinux: %s:  called before initial load_policy\n",
+		       __func__);
+		return -EINVAL;
+	}
 
 	read_lock(&state->ss->policy_rwlock);
 	rc = sidtab_hash_stats(state->ss->sidtab, page);
@@ -1627,7 +1633,7 @@ static int compute_sid_handle_invalid_context(
 		goto out;
 	if (context_struct_to_string(policydb, newcontext, &n, &nlen))
 		goto out;
-	audit_log(current->audit_context, GFP_ATOMIC, AUDIT_SELINUX_ERR,
+	audit_log(audit_context(), GFP_ATOMIC, AUDIT_SELINUX_ERR,
 		  "op=security_compute_sid invalid_context=%s"
 		  " scontext=%s"
 		  " tcontext=%s"
@@ -2139,7 +2145,7 @@ int security_load_policy(struct selinux_state *state, void *data, size_t len)
 	int rc = 0;
 	struct policy_file file = { data, len }, *fp = &file;
 
-	oldpolicydb = kzalloc(2 * sizeof(*oldpolicydb), GFP_KERNEL);
+	oldpolicydb = kcalloc(2, sizeof(*oldpolicydb), GFP_KERNEL);
 	if (!oldpolicydb) {
 		rc = -ENOMEM;
 		goto out;
@@ -2334,6 +2340,96 @@ int security_port_sid(struct selinux_state *state,
 	} else {
 		*out_sid = SECINITSID_PORT;
 	}
+
+out:
+	read_unlock(&state->ss->policy_rwlock);
+	return rc;
+}
+
+/**
+ * security_pkey_sid - Obtain the SID for a pkey.
+ * @subnet_prefix: Subnet Prefix
+ * @pkey_num: pkey number
+ * @out_sid: security identifier
+ */
+int security_ib_pkey_sid(struct selinux_state *state,
+			 u64 subnet_prefix, u16 pkey_num, u32 *out_sid)
+{
+	struct policydb *policydb;
+	struct ocontext *c;
+	int rc = 0;
+
+	read_lock(&state->ss->policy_rwlock);
+
+	policydb = &state->ss->policydb;
+
+	c = policydb->ocontexts[OCON_IBPKEY];
+	while (c) {
+		if (c->u.ibpkey.low_pkey <= pkey_num &&
+		    c->u.ibpkey.high_pkey >= pkey_num &&
+		    c->u.ibpkey.subnet_prefix == subnet_prefix)
+			break;
+
+		c = c->next;
+	}
+
+	if (c) {
+		if (!c->sid[0]) {
+			rc = context_struct_to_sid(state,
+						   &c->context[0],
+						   &c->sid[0]);
+			if (rc)
+				goto out;
+		}
+		*out_sid = c->sid[0];
+	} else
+		*out_sid = SECINITSID_UNLABELED;
+
+out:
+	read_unlock(&state->ss->policy_rwlock);
+	return rc;
+}
+
+/**
+ * security_ib_endport_sid - Obtain the SID for a subnet management interface.
+ * @dev_name: device name
+ * @port: port number
+ * @out_sid: security identifier
+ */
+int security_ib_endport_sid(struct selinux_state *state,
+			    const char *dev_name, u8 port_num, u32 *out_sid)
+{
+	struct policydb *policydb;
+	struct sidtab *sidtab;
+	struct ocontext *c;
+	int rc = 0;
+
+	read_lock(&state->ss->policy_rwlock);
+
+	policydb = &state->ss->policydb;
+	sidtab = state->ss->sidtab;
+
+	c = policydb->ocontexts[OCON_IBENDPORT];
+	while (c) {
+		if (c->u.ibendport.port == port_num &&
+		    !strncmp(c->u.ibendport.dev_name,
+			     dev_name,
+			     IB_DEVICE_NAME_MAX))
+			break;
+
+		c = c->next;
+	}
+
+	if (c) {
+		if (!c->sid[0]) {
+			rc = context_struct_to_sid(state, &c->context[0],
+						   &c->sid[0]);
+			if (rc)
+				goto out;
+		}
+		*out_sid = c->sid[0];
+	} else
+		*out_sid = SECINITSID_UNLABELED;
 
 out:
 	read_unlock(&state->ss->policy_rwlock);
@@ -2749,6 +2845,13 @@ int security_get_bools(struct selinux_state *state,
 	struct policydb *policydb;
 	int i, rc;
 
+	if (!state->initialized) {
+		*len = 0;
+		*names = NULL;
+		*values = NULL;
+		return 0;
+	}
+
 	read_lock(&state->ss->policy_rwlock);
 
 	policydb = &state->ss->policydb;
@@ -2816,7 +2919,7 @@ int security_set_bools(struct selinux_state *state, int len, int *values)
 
 	for (i = 0; i < len; i++) {
 		if (!!values[i] != policydb->bool_val_to_struct[i]->state) {
-			audit_log(current->audit_context, GFP_ATOMIC,
+			audit_log(audit_context(), GFP_ATOMIC,
 				AUDIT_MAC_CONFIG_CHANGE,
 				"bool=%s val=%d old_val=%d auid=%u ses=%u",
 				sym_name(policydb, SYM_BOOLS, i),
@@ -2959,7 +3062,7 @@ int security_sid_mls_copy(struct selinux_state *state,
 		if (rc) {
 			if (!context_struct_to_string(policydb, &newcon, &s,
 						      &len)) {
-				audit_log(current->audit_context,
+				audit_log(audit_context(),
 					  GFP_ATOMIC, AUDIT_SELINUX_ERR,
 					  "op=security_sid_mls_copy "
 					  "invalid_context=%s", s);
@@ -3081,6 +3184,12 @@ int security_get_classes(struct selinux_state *state,
 {
 	struct policydb *policydb = &state->ss->policydb;
 	int rc;
+
+	if (!state->initialized) {
+		*nclasses = 0;
+		*classes = NULL;
+		return 0;
+	}
 
 	read_lock(&state->ss->policy_rwlock);
 

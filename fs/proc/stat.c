@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #include <linux/cpumask.h>
 #include <linux/fs.h>
 #include <linux/init.h>
@@ -5,11 +6,12 @@
 #include <linux/kernel_stat.h>
 #include <linux/proc_fs.h>
 #include <linux/sched.h>
+#include <linux/sched/stat.h>
 #include <linux/seq_file.h>
 #include <linux/slab.h>
 #include <linux/time.h>
 #include <linux/irqnr.h>
-#include <linux/cputime.h>
+#include <linux/sched/cputime.h>
 #include <linux/tick.h>
 
 #ifndef arch_irq_stat_cpu
@@ -27,7 +29,7 @@ static u64 get_idle_time(int cpu)
 
 	idle = kcpustat_cpu(cpu).cpustat[CPUTIME_IDLE];
 	if (cpu_online(cpu) && !nr_iowait_cpu(cpu))
-		idle += cputime_to_nsecs(arch_idle_time(cpu));
+		idle += arch_idle_time(cpu);
 	return idle;
 }
 
@@ -37,7 +39,7 @@ static u64 get_iowait_time(int cpu)
 
 	iowait = kcpustat_cpu(cpu).cpustat[CPUTIME_IOWAIT];
 	if (cpu_online(cpu) && nr_iowait_cpu(cpu))
-		iowait += cputime_to_nsecs(arch_idle_time(cpu));
+		iowait += arch_idle_time(cpu);
 	return iowait;
 }
 
@@ -181,7 +183,7 @@ static int show_stat(struct seq_file *p, void *v)
 
 static int stat_open(struct inode *inode, struct file *file)
 {
-	size_t size = 1024 + 128 * num_online_cpus();
+	unsigned int size = 1024 + 128 * num_online_cpus();
 
 	/* minimum size to display an interrupt count : 2 bytes */
 	size += 2 * nr_irqs;

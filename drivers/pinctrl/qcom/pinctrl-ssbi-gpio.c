@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2015, Sony Mobile Communications AB.
- * Copyright (c) 2013, 2018 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -379,7 +379,7 @@ static int pm8xxx_pin_config_set(struct pinctrl_dev *pctldev,
 			banks |= BIT(0);
 			break;
 		case PM8XXX_QCOM_DRIVE_STRENGH:
-			if (arg > PM8921_GPIO_STRENGTH_LOW) {
+			if (arg > PMIC_GPIO_STRENGTH_LOW) {
 				dev_err(pctrl->dev, "invalid drive strength\n");
 				return -EINVAL;
 			}
@@ -602,7 +602,7 @@ static void pm8xxx_gpio_dbg_show(struct seq_file *s, struct gpio_chip *chip)
 #define pm8xxx_gpio_dbg_show NULL
 #endif
 
-static struct gpio_chip pm8xxx_gpio_template = {
+static const struct gpio_chip pm8xxx_gpio_template = {
 	.direction_input = pm8xxx_gpio_direction_input,
 	.direction_output = pm8xxx_gpio_direction_output,
 	.get = pm8xxx_gpio_get,

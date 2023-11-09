@@ -11,19 +11,19 @@
 #include <linux/nvmem-provider.h>
 
 struct nvmem_device {
-	const char              *name;
+	const char		*name;
 	struct module		*owner;
 	struct device		dev;
 	int			stride;
 	int			word_size;
-	int			ncells;
 	int			id;
-	int			users;
+	struct kref		refcnt;
 	size_t			size;
 	bool			read_only;
 	int			flags;
 	struct bin_attribute	eeprom;
 	struct device		*base_dev;
+	struct list_head	cells;
 	nvmem_reg_read_t	reg_read;
 	nvmem_reg_write_t	reg_write;
 	void *priv;

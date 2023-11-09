@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * cfg80211 MLME SAP interface
  *
@@ -691,7 +692,7 @@ int cfg80211_mlme_mgmt_tx(struct cfg80211_registered_device *rdev,
 	return rdev_mgmt_tx(rdev, wdev, params, cookie);
 }
 
-bool cfg80211_rx_mgmt(struct wireless_dev *wdev, int freq, int sig_mbm,
+bool cfg80211_rx_mgmt(struct wireless_dev *wdev, int freq, int sig_dbm,
 		      const u8 *buf, size_t len, u32 flags)
 {
 	struct wiphy *wiphy = wdev->wiphy;
@@ -707,7 +708,7 @@ bool cfg80211_rx_mgmt(struct wireless_dev *wdev, int freq, int sig_mbm,
 		cpu_to_le16(IEEE80211_FCTL_FTYPE | IEEE80211_FCTL_STYPE);
 	u16 stype;
 
-	trace_cfg80211_rx_mgmt(wdev, freq, sig_mbm);
+	trace_cfg80211_rx_mgmt(wdev, freq, sig_dbm);
 	stype = (le16_to_cpu(mgmt->frame_control) & IEEE80211_FCTL_STYPE) >> 4;
 
 	if (!(stypes->rx & BIT(stype))) {
@@ -734,7 +735,7 @@ bool cfg80211_rx_mgmt(struct wireless_dev *wdev, int freq, int sig_mbm,
 
 		/* Indicate the received Action frame to user space */
 		if (nl80211_send_mgmt(rdev, wdev, reg->nlportid,
-				      freq, sig_mbm,
+				      freq, sig_dbm,
 				      buf, len, flags, GFP_ATOMIC))
 			continue;
 
@@ -749,6 +750,12 @@ bool cfg80211_rx_mgmt(struct wireless_dev *wdev, int freq, int sig_mbm,
 }
 EXPORT_SYMBOL(cfg80211_rx_mgmt);
 
+void cfg80211_sched_dfs_chan_update(struct cfg80211_registered_device *rdev)
+{
+	cancel_delayed_work(&rdev->dfs_update_channels_wk);
+	queue_delayed_work(cfg80211_wq, &rdev->dfs_update_channels_wk, 0);
+}
+
 void cfg80211_dfs_channels_update_work(struct work_struct *work)
 {
 	struct delayed_work *delayed_work = to_delayed_work(work);
@@ -759,6 +766,8 @@ void cfg80211_dfs_channels_update_work(struct work_struct *work)
 	struct wiphy *wiphy;
 	bool check_again = false;
 	unsigned long timeout, next_time = 0;
+	unsigned long time_dfs_update;
+	enum nl80211_radar_event radar_event;
 	int bandid, i;
 
 	rdev = container_of(delayed_work, struct cfg80211_registered_device,
@@ -774,11 +783,27 @@ void cfg80211_dfs_channels_update_work(struct work_struct *work)
 		for (i = 0; i < sband->n_channels; i++) {
 			c = &sband->channels[i];
 
-			if (c->dfs_state != NL80211_DFS_UNAVAILABLE)
+			if (!(c->flags & IEEE80211_CHAN_RADAR))
 				continue;
 
-			timeout = c->dfs_state_entered + msecs_to_jiffies(
-					IEEE80211_DFS_MIN_NOP_TIME_MS);
+			if (c->dfs_state != NL80211_DFS_UNAVAILABLE &&
+			    c->dfs_state != NL80211_DFS_AVAILABLE)
+				continue;
+
+			if (c->dfs_state == NL80211_DFS_UNAVAILABLE) {
+				time_dfs_update = IEEE80211_DFS_MIN_NOP_TIME_MS;
+				radar_event = NL80211_RADAR_NOP_FINISHED;
+			} else {
+				if (regulatory_pre_cac_allowed(wiphy) ||
+				    cfg80211_any_wiphy_oper_chan(wiphy, c))
+					continue;
+
+				time_dfs_update = REG_PRE_CAC_EXPIRY_GRACE_MS;
+				radar_event = NL80211_RADAR_PRE_CAC_EXPIRED;
+			}
+
+			timeout = c->dfs_state_entered +
+				  msecs_to_jiffies(time_dfs_update);
 
 			if (time_after_eq(jiffies, timeout)) {
 				c->dfs_state = NL80211_DFS_USABLE;
@@ -788,8 +813,12 @@ void cfg80211_dfs_channels_update_work(struct work_struct *work)
 							NL80211_CHAN_NO_HT);
 
 				nl80211_radar_notify(rdev, &chandef,
-						     NL80211_RADAR_NOP_FINISHED,
-						     NULL, GFP_ATOMIC);
+						     radar_event, NULL,
+						     GFP_ATOMIC);
+
+				regulatory_propagate_dfs_state(wiphy, &chandef,
+							       c->dfs_state,
+							       radar_event);
 				continue;
 			}
 
@@ -814,7 +843,6 @@ void cfg80211_radar_event(struct wiphy *wiphy,
 			  gfp_t gfp)
 {
 	struct cfg80211_registered_device *rdev = wiphy_to_rdev(wiphy);
-	unsigned long timeout;
 
 	trace_cfg80211_radar_event(wiphy, chandef);
 
@@ -824,11 +852,12 @@ void cfg80211_radar_event(struct wiphy *wiphy,
 	 */
 	cfg80211_set_dfs_state(wiphy, chandef, NL80211_DFS_UNAVAILABLE);
 
-	timeout = msecs_to_jiffies(IEEE80211_DFS_MIN_NOP_TIME_MS);
-	queue_delayed_work(cfg80211_wq, &rdev->dfs_update_channels_wk,
-			   timeout);
+	cfg80211_sched_dfs_chan_update(rdev);
 
 	nl80211_radar_notify(rdev, chandef, NL80211_RADAR_DETECTED, NULL, gfp);
+
+	memcpy(&rdev->radar_chandef, chandef, sizeof(struct cfg80211_chan_def));
+	queue_work(cfg80211_wq, &rdev->propagate_radar_detect_wk);
 }
 EXPORT_SYMBOL(cfg80211_radar_event);
 
@@ -843,7 +872,7 @@ void cfg80211_cac_event(struct net_device *netdev,
 
 	trace_cfg80211_cac_event(netdev, event);
 
-	if (WARN_ON(!wdev->cac_started))
+	if (WARN_ON(!wdev->cac_started && event != NL80211_RADAR_CAC_STARTED))
 		return;
 
 	if (WARN_ON(!wdev->chandef.chan))
@@ -855,14 +884,21 @@ void cfg80211_cac_event(struct net_device *netdev,
 			  msecs_to_jiffies(wdev->cac_time_ms);
 		WARN_ON(!time_after_eq(jiffies, timeout));
 		cfg80211_set_dfs_state(wiphy, chandef, NL80211_DFS_AVAILABLE);
-		break;
+		memcpy(&rdev->cac_done_chandef, chandef,
+		       sizeof(struct cfg80211_chan_def));
+		queue_work(cfg80211_wq, &rdev->propagate_cac_done_wk);
+		cfg80211_sched_dfs_chan_update(rdev);
+		/* fall through */
 	case NL80211_RADAR_CAC_ABORTED:
+		wdev->cac_started = false;
+		break;
+	case NL80211_RADAR_CAC_STARTED:
+		wdev->cac_started = true;
 		break;
 	default:
 		WARN_ON(1);
 		return;
 	}
-	wdev->cac_started = false;
 
 	nl80211_radar_notify(rdev, chandef, event, netdev, gfp);
 }

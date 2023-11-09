@@ -1,7 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Security server interface.
  *
- * Author : Stephen Smalley, <sds@epoch.ncsc.mil>
+ * Author : Stephen Smalley, <sds@tycho.nsa.gov>
  *
  */
 
@@ -12,6 +13,9 @@
 #include <linux/dcache.h>
 #include <linux/magic.h>
 #include <linux/types.h>
+#include <linux/refcount.h>
+#include <linux/workqueue.h>
+#include "flask.h"
 
 #define SECSID_NULL			0x00000000 /* unspecified SID */
 #define SECSID_WILD			0xffffffff /* wildcard SID */
@@ -35,10 +39,11 @@
 #define POLICYDB_VERSION_DEFAULT_TYPE	28
 #define POLICYDB_VERSION_CONSTRAINT_NAMES	29
 #define POLICYDB_VERSION_XPERMS_IOCTL	30
+#define POLICYDB_VERSION_INFINIBAND		31
 
 /* Range of policy versions we understand*/
 #define POLICYDB_VERSION_MIN   POLICYDB_VERSION_BASE
-#define POLICYDB_VERSION_MAX	POLICYDB_VERSION_XPERMS_IOCTL
+#define POLICYDB_VERSION_MAX   POLICYDB_VERSION_INFINIBAND
 
 /* Mask for just the mount related flags */
 #define SE_MNTMASK	0x0f
@@ -68,9 +73,9 @@ extern int selinux_enabled;
 enum {
 	POLICYDB_CAPABILITY_NETPEER,
 	POLICYDB_CAPABILITY_OPENPERM,
-	POLICYDB_CAPABILITY_COMPAT1,
+	POLICYDB_CAPABILITY_EXTSOCKCLASS,
 	POLICYDB_CAPABILITY_ALWAYSNETWORK,
-	POLICYDB_CAPABILITY_COMPAT2,
+	POLICYDB_CAPABILITY_CGROUPSECLABEL,
 	POLICYDB_CAPABILITY_NNP_NOSUID_TRANSITION,
 	__POLICYDB_CAPABILITY_MAX
 };
@@ -146,11 +151,25 @@ static inline bool selinux_policycap_openperm(void)
 	return state->policycap[POLICYDB_CAPABILITY_OPENPERM];
 }
 
+static inline bool selinux_policycap_extsockclass(void)
+{
+	struct selinux_state *state = &selinux_state;
+
+	return state->policycap[POLICYDB_CAPABILITY_EXTSOCKCLASS];
+}
+
 static inline bool selinux_policycap_alwaysnetwork(void)
 {
 	struct selinux_state *state = &selinux_state;
 
 	return state->policycap[POLICYDB_CAPABILITY_ALWAYSNETWORK];
+}
+
+static inline bool selinux_policycap_cgroupseclabel(void)
+{
+	struct selinux_state *state = &selinux_state;
+
+	return state->policycap[POLICYDB_CAPABILITY_CGROUPSECLABEL];
 }
 
 static inline bool selinux_policycap_nnp_nosuid_transition(void)
@@ -274,6 +293,12 @@ int security_get_user_sids(struct selinux_state *state,
 
 int security_port_sid(struct selinux_state *state,
 		      u8 protocol, u16 port, u32 *out_sid);
+
+int security_ib_pkey_sid(struct selinux_state *state,
+			 u64 subnet_prefix, u16 pkey_num, u32 *out_sid);
+
+int security_ib_endport_sid(struct selinux_state *state,
+			    const char *dev_name, u8 port_num, u32 *out_sid);
 
 int security_netif_sid(struct selinux_state *state,
 		       char *name, u32 *if_sid);

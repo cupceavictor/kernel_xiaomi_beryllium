@@ -1,13 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * f_ecm.c -- USB CDC Ethernet (ECM) link function driver
  *
  * Copyright (C) 2003-2005,2008 David Brownell
  * Copyright (C) 2008 Nokia Corporation
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 /* #define VERBOSE_DEBUG */
@@ -716,6 +712,8 @@ ecm_bind(struct usb_configuration *c, struct usb_function *f)
 		ecm_opts->bound = true;
 	}
 
+	ecm_string_defs[1].s = ecm->ethaddr;
+
 	us = usb_gstrings_attach(cdev, ecm_strings,
 				 ARRAY_SIZE(ecm_string_defs));
 	if (IS_ERR(us))
@@ -852,7 +850,7 @@ static struct configfs_attribute *ecm_attrs[] = {
 	NULL,
 };
 
-static struct config_item_type ecm_func_type = {
+static const struct config_item_type ecm_func_type = {
 	.ct_item_ops	= &ecm_item_ops,
 	.ct_attrs	= ecm_attrs,
 	.ct_owner	= THIS_MODULE,
@@ -879,10 +877,9 @@ static struct usb_function_instance *ecm_alloc_inst(void)
 		return ERR_PTR(-ENOMEM);
 	mutex_init(&opts->lock);
 	opts->func_inst.free_func_inst = ecm_free_inst;
-	opts->net = gether_setup_name_default("ecm");
+	opts->net = gether_setup_default();
 	if (IS_ERR(opts->net)) {
 		struct net_device *net = opts->net;
-
 		kfree(opts);
 		return ERR_CAST(net);
 	}
@@ -945,7 +942,6 @@ static struct usb_function *ecm_alloc(struct usb_function_instance *fi)
 		mutex_unlock(&opts->lock);
 		return ERR_PTR(-EINVAL);
 	}
-	ecm_string_defs[1].s = ecm->ethaddr;
 
 	ecm->port.ioport = netdev_priv(opts->net);
 	mutex_unlock(&opts->lock);

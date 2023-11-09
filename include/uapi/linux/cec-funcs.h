@@ -1,44 +1,10 @@
+/* SPDX-License-Identifier: ((GPL-2.0 WITH Linux-syscall-note) OR BSD-3-Clause) */
 /*
  * cec - HDMI Consumer Electronics Control message functions
  *
  * Copyright 2016 Cisco Systems, Inc. and/or its affiliates. All rights reserved.
- *
- * This program is free software; you may redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; version 2 of the License.
- *
- * Alternatively you can redistribute this file under the terms of the
- * BSD license as stated below:
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- * 3. The names of its contributors may not be used to endorse or promote
- *    products derived from this software without specific prior written
- *    permission.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
  */
 
-/*
- * Note: this framework is still in staging and it is likely the API
- * will change before it goes out of staging.
- *
- * Once it is moved out of staging this header will move to uapi.
- */
 #ifndef _CEC_UAPI_FUNCS_H
 #define _CEC_UAPI_FUNCS_H
 
@@ -90,7 +56,7 @@ static inline void cec_ops_inactive_source(const struct cec_msg *msg,
 }
 
 static inline void cec_msg_request_active_source(struct cec_msg *msg,
-						 bool reply)
+						 int reply)
 {
 	msg->len = 2;
 	msg->msg[0] |= 0xf; /* broadcast */
@@ -115,7 +81,7 @@ static inline void cec_ops_routing_information(const struct cec_msg *msg,
 }
 
 static inline void cec_msg_routing_change(struct cec_msg *msg,
-					  bool reply,
+					  int reply,
 					  __u16 orig_phys_addr,
 					  __u16 new_phys_addr)
 {
@@ -162,7 +128,7 @@ static inline void cec_msg_standby(struct cec_msg *msg)
 
 
 /* One Touch Record Feature */
-static inline void cec_msg_record_off(struct cec_msg *msg, bool reply)
+static inline void cec_msg_record_off(struct cec_msg *msg, int reply)
 {
 	msg->len = 2;
 	msg->msg[1] = CEC_MSG_RECORD_OFF;
@@ -324,7 +290,7 @@ static inline void cec_msg_record_on_phys_addr(struct cec_msg *msg,
 }
 
 static inline void cec_msg_record_on(struct cec_msg *msg,
-				     bool reply,
+				     int reply,
 				     const struct cec_op_record_src *rec_src)
 {
 	switch (rec_src->type) {
@@ -391,7 +357,7 @@ static inline void cec_ops_record_status(const struct cec_msg *msg,
 }
 
 static inline void cec_msg_record_tv_screen(struct cec_msg *msg,
-					    bool reply)
+					    int reply)
 {
 	msg->len = 2;
 	msg->msg[1] = CEC_MSG_RECORD_TV_SCREEN;
@@ -465,7 +431,7 @@ static inline void cec_ops_timer_cleared_status(const struct cec_msg *msg,
 }
 
 static inline void cec_msg_clear_analogue_timer(struct cec_msg *msg,
-						bool reply,
+						int reply,
 						__u8 day,
 						__u8 month,
 						__u8 start_hr,
@@ -520,7 +486,7 @@ static inline void cec_ops_clear_analogue_timer(const struct cec_msg *msg,
 }
 
 static inline void cec_msg_clear_digital_timer(struct cec_msg *msg,
-				bool reply,
+				int reply,
 				__u8 day,
 				__u8 month,
 				__u8 start_hr,
@@ -566,7 +532,7 @@ static inline void cec_ops_clear_digital_timer(const struct cec_msg *msg,
 }
 
 static inline void cec_msg_clear_ext_timer(struct cec_msg *msg,
-					   bool reply,
+					   int reply,
 					   __u8 day,
 					   __u8 month,
 					   __u8 start_hr,
@@ -621,7 +587,7 @@ static inline void cec_ops_clear_ext_timer(const struct cec_msg *msg,
 }
 
 static inline void cec_msg_set_analogue_timer(struct cec_msg *msg,
-					      bool reply,
+					      int reply,
 					      __u8 day,
 					      __u8 month,
 					      __u8 start_hr,
@@ -676,7 +642,7 @@ static inline void cec_ops_set_analogue_timer(const struct cec_msg *msg,
 }
 
 static inline void cec_msg_set_digital_timer(struct cec_msg *msg,
-			bool reply,
+			int reply,
 			__u8 day,
 			__u8 month,
 			__u8 start_hr,
@@ -722,7 +688,7 @@ static inline void cec_ops_set_digital_timer(const struct cec_msg *msg,
 }
 
 static inline void cec_msg_set_ext_timer(struct cec_msg *msg,
-					 bool reply,
+					 int reply,
 					 __u8 day,
 					 __u8 month,
 					 __u8 start_hr,
@@ -814,7 +780,7 @@ static inline void cec_ops_cec_version(const struct cec_msg *msg,
 }
 
 static inline void cec_msg_get_cec_version(struct cec_msg *msg,
-					   bool reply)
+					   int reply)
 {
 	msg->len = 2;
 	msg->msg[1] = CEC_MSG_GET_CEC_VERSION;
@@ -840,7 +806,7 @@ static inline void cec_ops_report_physical_addr(const struct cec_msg *msg,
 }
 
 static inline void cec_msg_give_physical_addr(struct cec_msg *msg,
-					      bool reply)
+					      int reply)
 {
 	msg->len = 2;
 	msg->msg[1] = CEC_MSG_GIVE_PHYSICAL_ADDR;
@@ -864,7 +830,7 @@ static inline void cec_ops_set_menu_language(const struct cec_msg *msg,
 }
 
 static inline void cec_msg_get_menu_language(struct cec_msg *msg,
-					     bool reply)
+					     int reply)
 {
 	msg->len = 2;
 	msg->msg[1] = CEC_MSG_GET_MENU_LANGUAGE;
@@ -901,6 +867,7 @@ static inline void cec_ops_report_features(const struct cec_msg *msg,
 	*cec_version = msg->msg[2];
 	*all_device_types = msg->msg[3];
 	*rc_profile = p;
+	*dev_features = NULL;
 	while (p < &msg->msg[14] && (*p & CEC_OP_FEAT_EXT))
 		p++;
 	if (!(*p & CEC_OP_FEAT_EXT)) {
@@ -913,7 +880,7 @@ static inline void cec_ops_report_features(const struct cec_msg *msg,
 }
 
 static inline void cec_msg_give_features(struct cec_msg *msg,
-					 bool reply)
+					 int reply)
 {
 	msg->len = 2;
 	msg->msg[1] = CEC_MSG_GIVE_FEATURES;
@@ -950,7 +917,7 @@ static inline void cec_ops_deck_status(const struct cec_msg *msg,
 }
 
 static inline void cec_msg_give_deck_status(struct cec_msg *msg,
-					    bool reply,
+					    int reply,
 					    __u8 status_req)
 {
 	msg->len = 3;
@@ -985,7 +952,7 @@ static inline void cec_ops_play(const struct cec_msg *msg,
 struct cec_op_tuner_device_info {
 	__u8 rec_flag;
 	__u8 tuner_display_info;
-	bool is_analog;
+	__u8 is_analog;
 	union {
 		struct cec_op_digital_service_id digital;
 		struct {
@@ -1055,7 +1022,7 @@ static inline void cec_ops_tuner_device_status(const struct cec_msg *msg,
 }
 
 static inline void cec_msg_give_tuner_device_status(struct cec_msg *msg,
-						    bool reply,
+						    int reply,
 						    __u8 status_req)
 {
 	msg->len = 3;
@@ -1139,7 +1106,7 @@ static inline void cec_ops_device_vendor_id(const struct cec_msg *msg,
 }
 
 static inline void cec_msg_give_device_vendor_id(struct cec_msg *msg,
-						 bool reply)
+						 int reply)
 {
 	msg->len = 2;
 	msg->msg[1] = CEC_MSG_GIVE_DEVICE_VENDOR_ID;
@@ -1275,7 +1242,7 @@ static inline void cec_ops_set_osd_name(const struct cec_msg *msg,
 }
 
 static inline void cec_msg_give_osd_name(struct cec_msg *msg,
-					 bool reply)
+					 int reply)
 {
 	msg->len = 2;
 	msg->msg[1] = CEC_MSG_GIVE_OSD_NAME;
@@ -1299,7 +1266,7 @@ static inline void cec_ops_menu_status(const struct cec_msg *msg,
 }
 
 static inline void cec_msg_menu_request(struct cec_msg *msg,
-					bool reply,
+					int reply,
 					__u8 menu_req)
 {
 	msg->len = 3;
@@ -1316,7 +1283,7 @@ static inline void cec_ops_menu_request(const struct cec_msg *msg,
 
 struct cec_op_ui_command {
 	__u8 ui_cmd;
-	bool has_opt_arg;
+	__u8 has_opt_arg;
 	union {
 		struct cec_op_channel_data channel_identifier;
 		__u8 ui_broadcast_type;
@@ -1362,7 +1329,7 @@ static inline void cec_ops_user_control_pressed(const struct cec_msg *msg,
 						struct cec_op_ui_command *ui_cmd)
 {
 	ui_cmd->ui_cmd = msg->msg[2];
-	ui_cmd->has_opt_arg = false;
+	ui_cmd->has_opt_arg = 0;
 	if (msg->len == 3)
 		return;
 	switch (ui_cmd->ui_cmd) {
@@ -1374,12 +1341,12 @@ static inline void cec_ops_user_control_pressed(const struct cec_msg *msg,
 	case 0x6a:
 		/* The optional operand is one byte for all these ui commands */
 		ui_cmd->play_mode = msg->msg[3];
-		ui_cmd->has_opt_arg = true;
+		ui_cmd->has_opt_arg = 1;
 		break;
 	case 0x67:
 		if (msg->len < 7)
 			break;
-		ui_cmd->has_opt_arg = true;
+		ui_cmd->has_opt_arg = 1;
 		ui_cmd->channel_identifier.channel_number_fmt = msg->msg[3] >> 2;
 		ui_cmd->channel_identifier.major = ((msg->msg[3] & 3) << 6) | msg->msg[4];
 		ui_cmd->channel_identifier.minor = (msg->msg[5] << 8) | msg->msg[6];
@@ -1411,7 +1378,7 @@ static inline void cec_ops_report_power_status(const struct cec_msg *msg,
 }
 
 static inline void cec_msg_give_device_power_status(struct cec_msg *msg,
-						    bool reply)
+						    int reply)
 {
 	msg->len = 2;
 	msg->msg[1] = CEC_MSG_GIVE_DEVICE_POWER_STATUS;
@@ -1471,7 +1438,7 @@ static inline void cec_ops_report_audio_status(const struct cec_msg *msg,
 }
 
 static inline void cec_msg_give_audio_status(struct cec_msg *msg,
-					     bool reply)
+					     int reply)
 {
 	msg->len = 2;
 	msg->msg[1] = CEC_MSG_GIVE_AUDIO_STATUS;
@@ -1493,7 +1460,7 @@ static inline void cec_ops_set_system_audio_mode(const struct cec_msg *msg,
 }
 
 static inline void cec_msg_system_audio_mode_request(struct cec_msg *msg,
-						     bool reply,
+						     int reply,
 						     __u16 phys_addr)
 {
 	msg->len = phys_addr == 0xffff ? 2 : 4;
@@ -1528,7 +1495,7 @@ static inline void cec_ops_system_audio_mode_status(const struct cec_msg *msg,
 }
 
 static inline void cec_msg_give_system_audio_mode_status(struct cec_msg *msg,
-							 bool reply)
+							 int reply)
 {
 	msg->len = 2;
 	msg->msg[1] = CEC_MSG_GIVE_SYSTEM_AUDIO_MODE_STATUS;
@@ -1568,7 +1535,7 @@ static inline void cec_ops_report_short_audio_descriptor(const struct cec_msg *m
 }
 
 static inline void cec_msg_request_short_audio_descriptor(struct cec_msg *msg,
-					bool reply,
+					int reply,
 					__u8 num_descriptors,
 					const __u8 *audio_format_id,
 					const __u8 *audio_format_code)
@@ -1626,7 +1593,7 @@ static inline void cec_msg_report_arc_initiated(struct cec_msg *msg)
 }
 
 static inline void cec_msg_initiate_arc(struct cec_msg *msg,
-					bool reply)
+					int reply)
 {
 	msg->len = 2;
 	msg->msg[1] = CEC_MSG_INITIATE_ARC;
@@ -1634,7 +1601,7 @@ static inline void cec_msg_initiate_arc(struct cec_msg *msg,
 }
 
 static inline void cec_msg_request_arc_initiation(struct cec_msg *msg,
-						  bool reply)
+						  int reply)
 {
 	msg->len = 2;
 	msg->msg[1] = CEC_MSG_REQUEST_ARC_INITIATION;
@@ -1648,7 +1615,7 @@ static inline void cec_msg_report_arc_terminated(struct cec_msg *msg)
 }
 
 static inline void cec_msg_terminate_arc(struct cec_msg *msg,
-					 bool reply)
+					 int reply)
 {
 	msg->len = 2;
 	msg->msg[1] = CEC_MSG_TERMINATE_ARC;
@@ -1656,7 +1623,7 @@ static inline void cec_msg_terminate_arc(struct cec_msg *msg,
 }
 
 static inline void cec_msg_request_arc_termination(struct cec_msg *msg,
-						   bool reply)
+						   int reply)
 {
 	msg->len = 2;
 	msg->msg[1] = CEC_MSG_REQUEST_ARC_TERMINATION;
@@ -1673,14 +1640,15 @@ static inline void cec_msg_report_current_latency(struct cec_msg *msg,
 						  __u8 audio_out_compensated,
 						  __u8 audio_out_delay)
 {
-	msg->len = 7;
+	msg->len = 6;
 	msg->msg[0] |= 0xf; /* broadcast */
 	msg->msg[1] = CEC_MSG_REPORT_CURRENT_LATENCY;
 	msg->msg[2] = phys_addr >> 8;
 	msg->msg[3] = phys_addr & 0xff;
 	msg->msg[4] = video_latency;
 	msg->msg[5] = (low_latency_mode << 2) | audio_out_compensated;
-	msg->msg[6] = audio_out_delay;
+	if (audio_out_compensated == 3)
+		msg->msg[msg->len++] = audio_out_delay;
 }
 
 static inline void cec_ops_report_current_latency(const struct cec_msg *msg,
@@ -1694,11 +1662,14 @@ static inline void cec_ops_report_current_latency(const struct cec_msg *msg,
 	*video_latency = msg->msg[4];
 	*low_latency_mode = (msg->msg[5] >> 2) & 1;
 	*audio_out_compensated = msg->msg[5] & 3;
-	*audio_out_delay = msg->msg[6];
+	if (*audio_out_compensated == 3 && msg->len >= 7)
+		*audio_out_delay = msg->msg[6];
+	else
+		*audio_out_delay = 0;
 }
 
 static inline void cec_msg_request_current_latency(struct cec_msg *msg,
-						   bool reply,
+						   int reply,
 						   __u16 phys_addr)
 {
 	msg->len = 4;

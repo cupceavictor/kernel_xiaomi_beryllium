@@ -3,7 +3,6 @@
  *
  * Copyright (C) 2012-2013, Samsung Electronics, Co., Ltd.
  * Andrzej Hajda <a.hajda@samsung.com>
- * Copyright (C) 2018 XiaoMi, Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
@@ -166,14 +165,14 @@ of_mipi_dsi_device_add(struct mipi_dsi_host *host, struct device_node *node)
 	u32 reg;
 
 	if (of_modalias_node(node, info.type, sizeof(info.type)) < 0) {
-		dev_err(dev, "modalias failure on %s\n", node->full_name);
+		dev_err(dev, "modalias failure on %pOF\n", node);
 		return ERR_PTR(-EINVAL);
 	}
 
 	ret = of_property_read_u32(node, "reg", &reg);
 	if (ret) {
-		dev_err(dev, "device node %s has no valid reg property: %d\n",
-			node->full_name, ret);
+		dev_err(dev, "device node %pOF has no valid reg property: %d\n",
+			node, ret);
 		return ERR_PTR(-EINVAL);
 	}
 
@@ -364,8 +363,6 @@ static ssize_t mipi_dsi_device_transfer(struct mipi_dsi_device *dsi,
 		msg->flags |= MIPI_DSI_MSG_USE_LPM;
 	msg->flags |= MIPI_DSI_MSG_LASTCOMMAND;
 
-	msg->flags |= MIPI_DSI_MSG_LASTCOMMAND;
-
 	return ops->transfer(dsi->host, msg);
 }
 
@@ -397,8 +394,8 @@ bool mipi_dsi_packet_format_is_short(u8 type)
 	case MIPI_DSI_DCS_SHORT_WRITE:
 	case MIPI_DSI_DCS_SHORT_WRITE_PARAM:
 	case MIPI_DSI_DCS_READ:
+	case MIPI_DSI_DCS_COMPRESSION_MODE:
 	case MIPI_DSI_SET_MAXIMUM_RETURN_PACKET_SIZE:
-	case MIPI_DSI_COMPRESSION_MODE:
 		return true;
 	}
 
@@ -416,6 +413,7 @@ EXPORT_SYMBOL(mipi_dsi_packet_format_is_short);
 bool mipi_dsi_packet_format_is_long(u8 type)
 {
 	switch (type) {
+	case MIPI_DSI_PPS_LONG_WRITE:
 	case MIPI_DSI_NULL_PACKET:
 	case MIPI_DSI_BLANKING_PACKET:
 	case MIPI_DSI_GENERIC_LONG_WRITE:
@@ -430,7 +428,6 @@ bool mipi_dsi_packet_format_is_long(u8 type)
 	case MIPI_DSI_PACKED_PIXEL_STREAM_18:
 	case MIPI_DSI_PIXEL_STREAM_3BYTE_18:
 	case MIPI_DSI_PACKED_PIXEL_STREAM_24:
-	case MIPI_DSI_PPS:
 		return true;
 	}
 
@@ -461,7 +458,7 @@ int mipi_dsi_create_packet(struct mipi_dsi_packet *packet,
 		return -EINVAL;
 
 	memset(packet, 0, sizeof(*packet));
-	packet->header[2] = ((msg->channel & 0x3) << 6) | (msg->type & 0x3f);
+	packet->header[0] = ((msg->channel & 0x3) << 6) | (msg->type & 0x3f);
 
 	/* TODO: compute ECC if hardware support is not available */
 
@@ -473,16 +470,16 @@ int mipi_dsi_create_packet(struct mipi_dsi_packet *packet,
 	 * and 2.
 	 */
 	if (mipi_dsi_packet_format_is_long(msg->type)) {
-		packet->header[0] = (msg->tx_len >> 0) & 0xff;
-		packet->header[1] = (msg->tx_len >> 8) & 0xff;
+		packet->header[1] = (msg->tx_len >> 0) & 0xff;
+		packet->header[2] = (msg->tx_len >> 8) & 0xff;
 
 		packet->payload_length = msg->tx_len;
 		packet->payload = msg->tx_buf;
 	} else {
 		const u8 *tx = msg->tx_buf;
 
-		packet->header[0] = (msg->tx_len > 0) ? tx[0] : 0;
-		packet->header[1] = (msg->tx_len > 1) ? tx[1] : 0;
+		packet->header[1] = (msg->tx_len > 0) ? tx[0] : 0;
+		packet->header[2] = (msg->tx_len > 1) ? tx[1] : 0;
 	}
 
 	packet->size = sizeof(packet->header) + packet->payload_length;
@@ -505,8 +502,9 @@ int mipi_dsi_shutdown_peripheral(struct mipi_dsi_device *dsi)
 		.tx_buf = (u8 [2]) { 0, 0 },
 		.tx_len = 2,
 	};
+	int ret = mipi_dsi_device_transfer(dsi, &msg);
 
-	return mipi_dsi_device_transfer(dsi, &msg);
+	return (ret < 0) ? ret : 0;
 }
 EXPORT_SYMBOL(mipi_dsi_shutdown_peripheral);
 
@@ -524,8 +522,9 @@ int mipi_dsi_turn_on_peripheral(struct mipi_dsi_device *dsi)
 		.tx_buf = (u8 [2]) { 0, 0 },
 		.tx_len = 2,
 	};
+	int ret = mipi_dsi_device_transfer(dsi, &msg);
 
-	return mipi_dsi_device_transfer(dsi, &msg);
+	return (ret < 0) ? ret : 0;
 }
 EXPORT_SYMBOL(mipi_dsi_turn_on_peripheral);
 
@@ -548,8 +547,9 @@ int mipi_dsi_set_maximum_return_packet_size(struct mipi_dsi_device *dsi,
 		.tx_len = sizeof(tx),
 		.tx_buf = tx,
 	};
+	int ret = mipi_dsi_device_transfer(dsi, &msg);
 
-	return mipi_dsi_device_transfer(dsi, &msg);
+	return (ret < 0) ? ret : 0;
 }
 EXPORT_SYMBOL(mipi_dsi_set_maximum_return_packet_size);
 
@@ -1048,29 +1048,6 @@ int mipi_dsi_dcs_set_tear_scanline(struct mipi_dsi_device *dsi, u16 scanline)
 }
 EXPORT_SYMBOL(mipi_dsi_dcs_set_tear_scanline);
 
-#define DIMMINGOFFCMD 0x20
-int mipi_dsi_dcs_set_display_brightness_ss(struct mipi_dsi_device *dsi,
-					u16 brightness)
-{
-	u8 payload[2] = { brightness >> 8, brightness & 0xff };
-	u8 dimmingoffcmd = DIMMINGOFFCMD;
-	ssize_t err;
-
-	if (brightness == 0) {
-		err = mipi_dsi_dcs_write(dsi, MIPI_DCS_WRITE_CONTROL_DISPLAY,
-					&dimmingoffcmd, sizeof(dimmingoffcmd));
-		if (err < 0)
-			pr_err("dimming off send failed\n");
-	}
-
-	err = mipi_dsi_dcs_write(dsi, MIPI_DCS_SET_DISPLAY_BRIGHTNESS,
-				 payload, sizeof(payload));
-	if (err < 0)
-		return err;
-
-	return 0;
-}
-
 /**
  * mipi_dsi_dcs_set_display_brightness() - sets the brightness value of the
  *    display
@@ -1119,6 +1096,58 @@ int mipi_dsi_dcs_get_display_brightness(struct mipi_dsi_device *dsi,
 	return 0;
 }
 EXPORT_SYMBOL(mipi_dsi_dcs_get_display_brightness);
+
+/**
+ * mipi_dsi_dcs_set_display_brightness_large() - sets the 16-bit brightness value
+ *    of the display
+ * @dsi: DSI peripheral device
+ * @brightness: brightness value
+ *
+ * Return: 0 on success or a negative error code on failure.
+ */
+int mipi_dsi_dcs_set_display_brightness_large(struct mipi_dsi_device *dsi,
+					     u16 brightness)
+{
+	u8 payload[2] = { brightness >> 8, brightness & 0xff };
+	ssize_t err;
+
+	err = mipi_dsi_dcs_write(dsi, MIPI_DCS_SET_DISPLAY_BRIGHTNESS,
+				 payload, sizeof(payload));
+	if (err < 0)
+		return err;
+
+	return 0;
+}
+EXPORT_SYMBOL(mipi_dsi_dcs_set_display_brightness_large);
+
+/**
+ * mipi_dsi_dcs_get_display_brightness_large() - gets the current 16-bit
+ *    brightness value of the display
+ * @dsi: DSI peripheral device
+ * @brightness: brightness value
+ *
+ * Return: 0 on success or a negative error code on failure.
+ */
+int mipi_dsi_dcs_get_display_brightness_large(struct mipi_dsi_device *dsi,
+					     u16 *brightness)
+{
+	u8 brightness_be[2];
+	ssize_t err;
+
+	err = mipi_dsi_dcs_read(dsi, MIPI_DCS_GET_DISPLAY_BRIGHTNESS,
+				brightness_be, sizeof(brightness_be));
+	if (err <= 0) {
+		if (err == 0)
+			err = -ENODATA;
+
+		return err;
+	}
+
+	*brightness = (brightness_be[0] << 8) | brightness_be[1];
+
+	return 0;
+}
+EXPORT_SYMBOL(mipi_dsi_dcs_get_display_brightness_large);
 
 static int mipi_dsi_drv_probe(struct device *dev)
 {

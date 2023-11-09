@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * drivers/usb/core/usb.c
  *
@@ -11,6 +12,8 @@
  * (C) Copyright Yggdrasil Computing, Inc. 2000
  *     (usb_device_id matching changes by Adam J. Richter)
  * (C) Copyright Greg Kroah-Hartman 2002-2003
+ *
+ * Released under the GPLv2 only.
  *
  * NOTE! This is not actually a driver at all, rather this is
  * just a collection of helper routines that implement the
@@ -71,6 +74,48 @@ MODULE_PARM_DESC(autosuspend, "default autosuspend delay");
 #define usb_autosuspend_delay		0
 #endif
 
+static bool match_endpoint(struct usb_endpoint_descriptor *epd,
+		struct usb_endpoint_descriptor **bulk_in,
+		struct usb_endpoint_descriptor **bulk_out,
+		struct usb_endpoint_descriptor **int_in,
+		struct usb_endpoint_descriptor **int_out)
+{
+	switch (usb_endpoint_type(epd)) {
+	case USB_ENDPOINT_XFER_BULK:
+		if (usb_endpoint_dir_in(epd)) {
+			if (bulk_in && !*bulk_in) {
+				*bulk_in = epd;
+				break;
+			}
+		} else {
+			if (bulk_out && !*bulk_out) {
+				*bulk_out = epd;
+				break;
+			}
+		}
+
+		return false;
+	case USB_ENDPOINT_XFER_INT:
+		if (usb_endpoint_dir_in(epd)) {
+			if (int_in && !*int_in) {
+				*int_in = epd;
+				break;
+			}
+		} else {
+			if (int_out && !*int_out) {
+				*int_out = epd;
+				break;
+			}
+		}
+
+		return false;
+	default:
+		return false;
+	}
+
+	return (!bulk_in || *bulk_in) && (!bulk_out || *bulk_out) &&
+			(!int_in || *int_in) && (!int_out || *int_out);
+}
 
 /**
  * usb_find_common_endpoints() -- look up common endpoint descriptors
@@ -110,50 +155,135 @@ int usb_find_common_endpoints(struct usb_host_interface *alt,
 	for (i = 0; i < alt->desc.bNumEndpoints; ++i) {
 		epd = &alt->endpoint[i].desc;
 
-		switch (usb_endpoint_type(epd)) {
-		case USB_ENDPOINT_XFER_BULK:
-			if (usb_endpoint_dir_in(epd)) {
-				if (bulk_in && !*bulk_in) {
-					*bulk_in = epd;
-					break;
-				}
-			} else {
-				if (bulk_out && !*bulk_out) {
-					*bulk_out = epd;
-					break;
-				}
-			}
-
-			continue;
-		case USB_ENDPOINT_XFER_INT:
-			if (usb_endpoint_dir_in(epd)) {
-				if (int_in && !*int_in) {
-					*int_in = epd;
-					break;
-				}
-			} else {
-				if (int_out && !*int_out) {
-					*int_out = epd;
-					break;
-				}
-			}
-
-			continue;
-		default:
-			continue;
-		}
-
-		if ((!bulk_in || *bulk_in) &&
-				(!bulk_out || *bulk_out) &&
-				(!int_in || *int_in) &&
-				(!int_out || *int_out)) {
+		if (match_endpoint(epd, bulk_in, bulk_out, int_in, int_out))
 			return 0;
-		}
 	}
 
 	return -ENXIO;
 }
 EXPORT_SYMBOL_GPL(usb_find_common_endpoints);
+
+/**
+ * usb_find_common_endpoints_reverse() -- look up common endpoint descriptors
+ * @alt:	alternate setting to search
+ * @bulk_in:	pointer to descriptor pointer, or NULL
+ * @bulk_out:	pointer to descriptor pointer, or NULL
+ * @int_in:	pointer to descriptor pointer, or NULL
+ * @int_out:	pointer to descriptor pointer, or NULL
+ *
+ * Search the alternate setting's endpoint descriptors for the last bulk-in,
+ * bulk-out, interrupt-in and interrupt-out endpoints and return them in the
+ * provided pointers (unless they are NULL).
+ *
+ * If a requested endpoint is not found, the corresponding pointer is set to
+ * NULL.
+ *
+ * Return: Zero if all requested descriptors were found, or -ENXIO otherwise.
+ */
+int usb_find_common_endpoints_reverse(struct usb_host_interface *alt,
+		struct usb_endpoint_descriptor **bulk_in,
+		struct usb_endpoint_descriptor **bulk_out,
+		struct usb_endpoint_descriptor **int_in,
+		struct usb_endpoint_descriptor **int_out)
+{
+	struct usb_endpoint_descriptor *epd;
+	int i;
+
+	if (bulk_in)
+		*bulk_in = NULL;
+	if (bulk_out)
+		*bulk_out = NULL;
+	if (int_in)
+		*int_in = NULL;
+	if (int_out)
+		*int_out = NULL;
+
+	for (i = alt->desc.bNumEndpoints - 1; i >= 0; --i) {
+		epd = &alt->endpoint[i].desc;
+
+		if (match_endpoint(epd, bulk_in, bulk_out, int_in, int_out))
+			return 0;
+	}
+
+	return -ENXIO;
+}
+EXPORT_SYMBOL_GPL(usb_find_common_endpoints_reverse);
+
+/**
+ * usb_find_endpoint() - Given an endpoint address, search for the endpoint's
+ * usb_host_endpoint structure in an interface's current altsetting.
+ * @intf: the interface whose current altsetting should be searched
+ * @ep_addr: the endpoint address (number and direction) to find
+ *
+ * Search the altsetting's list of endpoints for one with the specified address.
+ *
+ * Return: Pointer to the usb_host_endpoint if found, %NULL otherwise.
+ */
+static const struct usb_host_endpoint *usb_find_endpoint(
+		const struct usb_interface *intf, unsigned int ep_addr)
+{
+	int n;
+	const struct usb_host_endpoint *ep;
+
+	n = intf->cur_altsetting->desc.bNumEndpoints;
+	ep = intf->cur_altsetting->endpoint;
+	for (; n > 0; (--n, ++ep)) {
+		if (ep->desc.bEndpointAddress == ep_addr)
+			return ep;
+	}
+	return NULL;
+}
+
+/**
+ * usb_check_bulk_endpoints - Check whether an interface's current altsetting
+ * contains a set of bulk endpoints with the given addresses.
+ * @intf: the interface whose current altsetting should be searched
+ * @ep_addrs: 0-terminated array of the endpoint addresses (number and
+ * direction) to look for
+ *
+ * Search for endpoints with the specified addresses and check their types.
+ *
+ * Return: %true if all the endpoints are found and are bulk, %false otherwise.
+ */
+bool usb_check_bulk_endpoints(
+		const struct usb_interface *intf, const u8 *ep_addrs)
+{
+	const struct usb_host_endpoint *ep;
+
+	for (; *ep_addrs; ++ep_addrs) {
+		ep = usb_find_endpoint(intf, *ep_addrs);
+		if (!ep || !usb_endpoint_xfer_bulk(&ep->desc))
+			return false;
+	}
+	return true;
+}
+EXPORT_SYMBOL_GPL(usb_check_bulk_endpoints);
+
+/**
+ * usb_check_int_endpoints - Check whether an interface's current altsetting
+ * contains a set of interrupt endpoints with the given addresses.
+ * @intf: the interface whose current altsetting should be searched
+ * @ep_addrs: 0-terminated array of the endpoint addresses (number and
+ * direction) to look for
+ *
+ * Search for endpoints with the specified addresses and check their types.
+ *
+ * Return: %true if all the endpoints are found and are interrupt,
+ * %false otherwise.
+ */
+bool usb_check_int_endpoints(
+		const struct usb_interface *intf, const u8 *ep_addrs)
+{
+	const struct usb_host_endpoint *ep;
+
+	for (; *ep_addrs; ++ep_addrs) {
+		ep = usb_find_endpoint(intf, *ep_addrs);
+		if (!ep || !usb_endpoint_xfer_int(&ep->desc))
+			return false;
+	}
+	return true;
+}
+EXPORT_SYMBOL_GPL(usb_check_int_endpoints);
 
 /**
  * usb_find_alt_setting() - Given a configuration, find the alternate setting
@@ -364,8 +494,7 @@ static void usb_release_dev(struct device *dev)
 
 	usb_destroy_configuration(udev);
 	usb_release_bos_descriptor(udev);
-	if (udev->parent)
-		of_node_put(dev->of_node);
+	of_node_put(dev->of_node);
 	usb_put_hcd(hcd);
 	kfree(udev->product);
 	kfree(udev->manufacturer);
@@ -564,6 +693,7 @@ struct usb_device *usb_alloc_dev(struct usb_device *parent,
 		dev->route = 0;
 
 		dev->dev.parent = bus->controller;
+		device_set_of_node_from_dev(&dev->dev, bus->sysdev);
 		dev_set_name(&dev->dev, "usb%d", bus->busnum);
 		root_hub = 1;
 	} else {
@@ -593,8 +723,7 @@ struct usb_device *usb_alloc_dev(struct usb_device *parent,
 			raw_port = usb_hcd_find_raw_port_number(usb_hcd,
 				port1);
 		}
-		dev->dev.of_node = usb_of_get_child_node(parent->dev.of_node,
-				raw_port);
+		dev->dev.of_node = usb_of_get_device_node(parent, raw_port);
 
 		/* hub driver sets up TT records */
 	}
@@ -798,7 +927,7 @@ usb_get_sec_event_ring_phys_addr(struct usb_device *dev,
 
 	return usb_hcd_get_sec_event_ring_phys_addr(dev, intr_num, dma);
 }
-EXPORT_SYMBOL(usb_get_sec_event_ring_phys_addr);
+EXPORT_SYMBOL_GPL(usb_get_sec_event_ring_phys_addr);
 
 phys_addr_t usb_get_xfer_ring_phys_addr(struct usb_device *dev,
 	struct usb_host_endpoint *ep, dma_addr_t *dma)
@@ -808,8 +937,12 @@ phys_addr_t usb_get_xfer_ring_phys_addr(struct usb_device *dev,
 
 	return usb_hcd_get_xfer_ring_phys_addr(dev, ep, dma);
 }
-EXPORT_SYMBOL(usb_get_xfer_ring_phys_addr);
+EXPORT_SYMBOL_GPL(usb_get_xfer_ring_phys_addr);
 
+/**
+ * usb_get_controller_id - returns the host controller id.
+ * @dev: the device whose host controller id is being queried.
+ */
 int usb_get_controller_id(struct usb_device *dev)
 {
 	if (dev->state == USB_STATE_NOTATTACHED)
@@ -817,13 +950,13 @@ int usb_get_controller_id(struct usb_device *dev)
 
 	return usb_hcd_get_controller_id(dev);
 }
-EXPORT_SYMBOL(usb_get_controller_id);
+EXPORT_SYMBOL_GPL(usb_get_controller_id);
 
 int usb_stop_endpoint(struct usb_device *dev, struct usb_host_endpoint *ep)
 {
 	return usb_hcd_stop_endpoint(dev, ep);
 }
-EXPORT_SYMBOL(usb_stop_endpoint);
+EXPORT_SYMBOL_GPL(usb_stop_endpoint);
 
 /*-------------------------------------------------------------------*/
 /*
@@ -1169,30 +1302,16 @@ static struct notifier_block usb_bus_nb = {
 struct dentry *usb_debug_root;
 EXPORT_SYMBOL_GPL(usb_debug_root);
 
-static struct dentry *usb_debug_devices;
-
-static int usb_debugfs_init(void)
+static void usb_debugfs_init(void)
 {
 	usb_debug_root = debugfs_create_dir("usb", NULL);
-	if (!usb_debug_root)
-		return -ENOENT;
-
-	usb_debug_devices = debugfs_create_file("devices", 0444,
-						usb_debug_root, NULL,
-						&usbfs_devices_fops);
-	if (!usb_debug_devices) {
-		debugfs_remove(usb_debug_root);
-		usb_debug_root = NULL;
-		return -ENOENT;
-	}
-
-	return 0;
+	debugfs_create_file("devices", 0444, usb_debug_root, NULL,
+			    &usbfs_devices_fops);
 }
 
 static void usb_debugfs_cleanup(void)
 {
-	debugfs_remove(usb_debug_devices);
-	debugfs_remove(usb_debug_root);
+	debugfs_remove_recursive(usb_debug_root);
 }
 
 /*
@@ -1207,9 +1326,7 @@ static int __init usb_init(void)
 	}
 	usb_init_pool_max();
 
-	retval = usb_debugfs_init();
-	if (retval)
-		goto out;
+	usb_debugfs_init();
 
 	usb_acpi_register();
 	retval = bus_register(&usb_bus_type);
@@ -1261,6 +1378,7 @@ static void __exit usb_exit(void)
 	if (usb_disabled())
 		return;
 
+	usb_release_quirk_list();
 	usb_deregister_device_driver(&usb_generic_driver);
 	usb_major_cleanup();
 	usb_deregister(&usbfs_driver);

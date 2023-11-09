@@ -1,13 +1,6 @@
-/* Copyright (c) 2016-2018, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2016-2018, The Linux Foundation. All rights reserved.
  */
 
 #ifndef __LINUX_DMA_MAPPING_FAST_H
@@ -17,17 +10,17 @@
 #include <linux/io-pgtable-fast.h>
 
 struct dma_iommu_mapping;
+struct io_pgtable_ops;
+struct iova_domain;
 
 struct dma_fast_smmu_mapping {
 	struct device		*dev;
 	struct iommu_domain	*domain;
+	struct iova_domain	*iovad;
+
 	dma_addr_t	 base;
 	size_t		 size;
 	size_t		 num_4k_pages;
-
-	u32		min_iova_align;
-	struct page	*guard_page;
-	u32		force_guard_page_len;
 
 	unsigned int	bitmap_size;
 	unsigned long	*bitmap;
@@ -36,18 +29,16 @@ struct dma_fast_smmu_mapping {
 	bool		have_stale_tlbs;
 
 	dma_addr_t	pgtbl_dma_handle;
-	av8l_fast_iopte	*pgtbl_pmds;
+	struct io_pgtable_ops *pgtbl_ops;
 
 	spinlock_t	lock;
 	struct notifier_block notifier;
-
-	int		is_smmu_pt_coherent;
 };
 
 #ifdef CONFIG_IOMMU_IO_PGTABLE_FAST
 int fast_smmu_init_mapping(struct device *dev,
 			    struct dma_iommu_mapping *mapping);
-void fast_smmu_release_mapping(struct kref *kref);
+void fast_smmu_put_dma_cookie(struct iommu_domain *domain);
 #else
 static inline int fast_smmu_init_mapping(struct device *dev,
 					  struct dma_iommu_mapping *mapping)
@@ -55,9 +46,7 @@ static inline int fast_smmu_init_mapping(struct device *dev,
 	return -ENODEV;
 }
 
-static inline void fast_smmu_release_mapping(struct kref *kref)
-{
-}
+static inline void fast_smmu_put_dma_cookie(struct iommu_domain *domain) {}
 #endif
 
 #endif /* __LINUX_DMA_MAPPING_FAST_H */

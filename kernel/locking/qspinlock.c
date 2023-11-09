@@ -12,11 +12,11 @@
  * GNU General Public License for more details.
  *
  * (C) Copyright 2013-2015 Hewlett-Packard Development Company, L.P.
- * (C) Copyright 2013-2014 Red Hat, Inc.
+ * (C) Copyright 2013-2014,2018 Red Hat, Inc.
  * (C) Copyright 2015 Intel Corp.
  * (C) Copyright 2015 Hewlett-Packard Enterprise Development LP
  *
- * Authors: Waiman Long <waiman.long@hpe.com>
+ * Authors: Waiman Long <longman@redhat.com>
  *          Peter Zijlstra <peterz@infradead.org>
  */
 
@@ -31,6 +31,11 @@
 #include <linux/prefetch.h>
 #include <asm/byteorder.h>
 #include <asm/qspinlock.h>
+
+/*
+ * Include queued spinlock statistics code
+ */
+#include "qspinlock_stat.h"
 
 /*
  * The basic principle of a queue-based spinlock can best be understood
@@ -227,6 +232,20 @@ static __always_inline u32 xchg_tail(struct qspinlock *lock, u32 tail)
 #endif /* _Q_PENDING_BITS == 8 */
 
 /**
+ * queued_fetch_set_pending_acquire - fetch the whole lock value and set pending
+ * @lock : Pointer to queued spinlock structure
+ * Return: The previous lock value
+ *
+ * *,*,* -> *,1,*
+ */
+#ifndef queued_fetch_set_pending_acquire
+static __always_inline u32 queued_fetch_set_pending_acquire(struct qspinlock *lock)
+{
+	return atomic_fetch_or_acquire(_Q_PENDING_VAL, &lock->val);
+}
+#endif
+
+/**
  * set_locked - Set the lock bit and own the lock
  * @lock: Pointer to queued spinlock structure
  *
@@ -263,123 +282,6 @@ static __always_inline u32  __pv_wait_head_or_lock(struct qspinlock *lock,
 #define queued_spin_lock_slowpath	native_queued_spin_lock_slowpath
 #endif
 
-/*
- * Various notes on spin_is_locked() and spin_unlock_wait(), which are
- * 'interesting' functions:
- *
- * PROBLEM: some architectures have an interesting issue with atomic ACQUIRE
- * operations in that the ACQUIRE applies to the LOAD _not_ the STORE (ARM64,
- * PPC). Also qspinlock has a similar issue per construction, the setting of
- * the locked byte can be unordered acquiring the lock proper.
- *
- * This gets to be 'interesting' in the following cases, where the /should/s
- * end up false because of this issue.
- *
- *
- * CASE 1:
- *
- * So the spin_is_locked() correctness issue comes from something like:
- *
- *   CPU0				CPU1
- *
- *   global_lock();			local_lock(i)
- *     spin_lock(&G)			  spin_lock(&L[i])
- *     for (i)				  if (!spin_is_locked(&G)) {
- *       spin_unlock_wait(&L[i]);	    smp_acquire__after_ctrl_dep();
- *					    return;
- *					  }
- *					  // deal with fail
- *
- * Where it is important CPU1 sees G locked or CPU0 sees L[i] locked such
- * that there is exclusion between the two critical sections.
- *
- * The load from spin_is_locked(&G) /should/ be constrained by the ACQUIRE from
- * spin_lock(&L[i]), and similarly the load(s) from spin_unlock_wait(&L[i])
- * /should/ be constrained by the ACQUIRE from spin_lock(&G).
- *
- * Similarly, later stuff is constrained by the ACQUIRE from CTRL+RMB.
- *
- *
- * CASE 2:
- *
- * For spin_unlock_wait() there is a second correctness issue, namely:
- *
- *   CPU0				CPU1
- *
- *   flag = set;
- *   smp_mb();				spin_lock(&l)
- *   spin_unlock_wait(&l);		if (!flag)
- *					  // add to lockless list
- *					spin_unlock(&l);
- *   // iterate lockless list
- *
- * Which wants to ensure that CPU1 will stop adding bits to the list and CPU0
- * will observe the last entry on the list (if spin_unlock_wait() had ACQUIRE
- * semantics etc..)
- *
- * Where flag /should/ be ordered against the locked store of l.
- */
-
-/*
- * queued_spin_lock_slowpath() can (load-)ACQUIRE the lock before
- * issuing an _unordered_ store to set _Q_LOCKED_VAL.
- *
- * This means that the store can be delayed, but no later than the
- * store-release from the unlock. This means that simply observing
- * _Q_LOCKED_VAL is not sufficient to determine if the lock is acquired.
- *
- * There are two paths that can issue the unordered store:
- *
- *  (1) clear_pending_set_locked():	*,1,0 -> *,0,1
- *
- *  (2) set_locked():			t,0,0 -> t,0,1 ; t != 0
- *      atomic_cmpxchg_relaxed():	t,0,0 -> 0,0,1
- *
- * However, in both cases we have other !0 state we've set before to queue
- * ourseves:
- *
- * For (1) we have the atomic_cmpxchg_acquire() that set _Q_PENDING_VAL, our
- * load is constrained by that ACQUIRE to not pass before that, and thus must
- * observe the store.
- *
- * For (2) we have a more intersting scenario. We enqueue ourselves using
- * xchg_tail(), which ends up being a RELEASE. This in itself is not
- * sufficient, however that is followed by an smp_cond_acquire() on the same
- * word, giving a RELEASE->ACQUIRE ordering. This again constrains our load and
- * guarantees we must observe that store.
- *
- * Therefore both cases have other !0 state that is observable before the
- * unordered locked byte store comes through. This means we can use that to
- * wait for the lock store, and then wait for an unlock.
- */
-#ifndef queued_spin_unlock_wait
-void queued_spin_unlock_wait(struct qspinlock *lock)
-{
-	u32 val;
-
-	for (;;) {
-		val = atomic_read(&lock->val);
-
-		if (!val) /* not locked, we're done */
-			goto done;
-
-		if (val & _Q_LOCKED_MASK) /* locked, go wait for unlock */
-			break;
-
-		/* not locked, but pending, wait until we observe the lock */
-		cpu_relax();
-	}
-
-	/* any unlock is good */
-	while (atomic_read(&lock->val) & _Q_LOCKED_MASK)
-		cpu_relax();
-
-done:
-	smp_acquire__after_ctrl_dep();
-}
-EXPORT_SYMBOL(queued_spin_unlock_wait);
-#endif
-
 #endif /* _GEN_PV_LOCK_SLOWPATH */
 
 /**
@@ -412,7 +314,7 @@ void queued_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 	BUILD_BUG_ON(CONFIG_NR_CPUS >= (1U << _Q_TAIL_CPU_BITS));
 
 	if (pv_enabled())
-		goto queue;
+		goto pv_queue;
 
 	if (virt_spin_lock(lock))
 		return;
@@ -425,7 +327,7 @@ void queued_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 	 */
 	if (val == _Q_PENDING_VAL) {
 		int cnt = _Q_PENDING_LOOPS;
-		val = smp_cond_load_acquire(&lock->val.counter,
+		val = atomic_cond_read_relaxed(&lock->val,
 					       (VAL != _Q_PENDING_VAL) || !cnt--);
 	}
 
@@ -441,45 +343,47 @@ void queued_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 	 * 0,0,0 -> 0,0,1 ; trylock
 	 * 0,0,1 -> 0,1,1 ; pending
 	 */
-	val = atomic_fetch_or_acquire(_Q_PENDING_VAL, &lock->val);
-	if (!(val & ~_Q_LOCKED_MASK)) {
-		/*
-		 * We're pending, wait for the owner to go away.
-		 *
-		 * *,1,1 -> *,1,0
-		 *
-		 * this wait loop must be a load-acquire such that we match the
-		 * store-release that clears the locked bit and create lock
-		 * sequentiality; this is because not all
-		 * clear_pending_set_locked() implementations imply full
-		 * barriers.
-		 */
-		if (val & _Q_LOCKED_MASK) {
-			atomic_cond_read_acquire(&lock->val,
-						 !(VAL & _Q_LOCKED_MASK));
-		}
+	val = queued_fetch_set_pending_acquire(lock);
 
-		/*
-		 * take ownership and clear the pending bit.
-		 *
-		 * *,1,0 -> *,0,1
-		 */
-		clear_pending_set_locked(lock);
-		return;
+	/*
+	 * If we observe any contention; undo and queue.
+	 */
+	if (unlikely(val & ~_Q_LOCKED_MASK)) {
+		if (!(val & _Q_PENDING_MASK))
+			clear_pending(lock);
+		goto queue;
 	}
 
 	/*
-	 * If pending was clear but there are waiters in the queue, then
-	 * we need to undo our setting of pending before we queue ourselves.
+	 * We're pending, wait for the owner to go away.
+	 *
+	 * 0,1,1 -> 0,1,0
+	 *
+	 * this wait loop must be a load-acquire such that we match the
+	 * store-release that clears the locked bit and create lock
+	 * sequentiality; this is because not all
+	 * clear_pending_set_locked() implementations imply full
+	 * barriers.
 	 */
-	if (!(val & _Q_PENDING_MASK))
-		clear_pending(lock);
+	if (val & _Q_LOCKED_MASK)
+		atomic_cond_read_acquire(&lock->val, !(VAL & _Q_LOCKED_MASK));
+
+	/*
+	 * take ownership and clear the pending bit.
+	 *
+	 * 0,1,0 -> 0,0,1
+	 */
+	clear_pending_set_locked(lock);
+	qstat_inc(qstat_lock_pending, true);
+	return;
 
 	/*
 	 * End of pending bit optimistic spinning and beginning of MCS
 	 * queuing.
 	 */
 queue:
+	qstat_inc(qstat_lock_slowpath, true);
+pv_queue:
 	node = this_cpu_ptr(&mcs_nodes[0]);
 	idx = node->count++;
 	tail = encode_tail(smp_processor_id(), idx);

@@ -1,7 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Implementation of the hash table type.
  *
- * Author : Stephen Smalley, <sds@epoch.ncsc.mil>
+ * Author : Stephen Smalley, <sds@tycho.nsa.gov>
  */
 #include <linux/kernel.h>
 #include <linux/slab.h>
@@ -150,7 +151,7 @@ void hashtab_stat(struct hashtab *h, struct hashtab_info *info)
 
 	slots_used = 0;
 	max_chain_len = 0;
-	for (slots_used = max_chain_len = i = 0; i < h->size; i++) {
+	for (i = 0; i < h->size; i++) {
 		cur = h->htable[i];
 		if (cur) {
 			slots_used++;

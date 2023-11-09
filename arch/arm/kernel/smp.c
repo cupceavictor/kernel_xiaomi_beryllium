@@ -11,7 +11,9 @@
 #include <linux/delay.h>
 #include <linux/init.h>
 #include <linux/spinlock.h>
-#include <linux/sched.h>
+#include <linux/sched/mm.h>
+#include <linux/sched/hotplug.h>
+#include <linux/sched/task_stack.h>
 #include <linux/interrupt.h>
 #include <linux/cache.h>
 #include <linux/profile.h>
@@ -27,7 +29,6 @@
 #include <linux/completion.h>
 #include <linux/cpufreq.h>
 #include <linux/irq_work.h>
-#include <linux/slab.h>
 
 #include <linux/atomic.h>
 #include <asm/bugs.h>
@@ -50,7 +51,6 @@
 #include <asm/virt.h>
 #include <asm/mach/arch.h>
 #include <asm/mpu.h>
-#include <asm/cputype.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/ipi.h>
@@ -148,7 +148,7 @@ int __cpu_up(unsigned int cpu, struct task_struct *idle)
 	 */
 	secondary_data.stack = task_stack_page(idle) + THREAD_START_SP;
 #ifdef CONFIG_ARM_MPU
-	secondary_data.mpu_rgn_szr = mpu_rgn_info.rgns[MPU_RAM_REGION].drsr;
+	secondary_data.mpu_rgn_info = &mpu_rgn_info;
 #endif
 
 #ifdef CONFIG_MMU
@@ -270,10 +270,10 @@ int __cpu_disable(void)
 	flush_cache_louis();
 	local_flush_tlb_all();
 
-	clear_tasks_mm_cpumask(cpu);
-
 	return 0;
 }
+
+static DECLARE_COMPLETION(cpu_died);
 
 /*
  * called on the thread which is asking for a CPU to be shutdown -
@@ -281,12 +281,13 @@ int __cpu_disable(void)
  */
 void __cpu_die(unsigned int cpu)
 {
-	if (!cpu_wait_death(cpu, 5)) {
+	if (!wait_for_completion_timeout(&cpu_died, msecs_to_jiffies(5000))) {
 		pr_err("CPU%u: cpu didn't die\n", cpu);
 		return;
 	}
-	pr_notice("CPU%u: shutdown\n", cpu);
+	pr_debug("CPU%u: shutdown\n", cpu);
 
+	clear_tasks_mm_cpumask(cpu);
 	/*
 	 * platform_cpu_kill() is generally expected to do the powering off
 	 * and/or cutting of clocks to the dying CPU.  Optionally, this may
@@ -327,7 +328,7 @@ void arch_cpu_idle_dead(void)
 	 * this returns, power and/or clocks can be removed at any point
 	 * from this CPU and its cache by platform_cpu_kill().
 	 */
-	(void)cpu_report_death();
+	complete(&cpu_died);
 
 	/*
 	 * Ensure that the cache lines associated with that completion are
@@ -397,7 +398,6 @@ asmlinkage void secondary_start_kernel(void)
 	 * The identity mapping is uncached (strongly ordered), so
 	 * switch away from it before attempting any exclusive accesses.
 	 */
-	arm_init_bp_hardening();
 	cpu_switch_mm(mm->pgd, mm);
 	local_flush_bp_all();
 	enter_lazy_tlb(mm, current);
@@ -408,12 +408,15 @@ asmlinkage void secondary_start_kernel(void)
 	 * reference and switch to it.
 	 */
 	cpu = smp_processor_id();
-	atomic_inc(&mm->mm_count);
+	mmgrab(mm);
 	current->active_mm = mm;
 	cpumask_set_cpu(cpu, mm_cpumask(mm));
 
 	cpu_init();
 
+#ifndef CONFIG_MMU
+	setup_vectors_base();
+#endif
 	pr_debug("CPU%u: Booted secondary processor\n", cpu);
 
 	preempt_disable();
@@ -425,11 +428,11 @@ asmlinkage void secondary_start_kernel(void)
 	if (smp_ops.smp_secondary_init)
 		smp_ops.smp_secondary_init(cpu);
 
-	smp_store_cpu_info(cpu);
-
 	notify_cpu_starting(cpu);
 
 	calibrate_delay();
+
+	smp_store_cpu_info(cpu);
 
 	/*
 	 * OK, now it's safe to let the boot CPU continue.  Wait for
@@ -513,6 +516,14 @@ void __init set_smp_cross_call(void (*fn)(const struct cpumask *, unsigned int))
 		__smp_cross_call = fn;
 }
 
+static void (*__smp_update_ipi_history_cb)(int cpu);
+
+void set_update_ipi_history_callback(void (*fn)(int))
+{
+	__smp_update_ipi_history_cb = fn;
+}
+EXPORT_SYMBOL_GPL(set_update_ipi_history_callback);
+
 static const char *ipi_types[NR_IPI] __tracepoint_string = {
 #define S(x,s)	[x] = s
 	S(IPI_WAKEUP, "CPU wakeup interrupts"),
@@ -528,18 +539,6 @@ static void smp_cross_call(const struct cpumask *target, unsigned int ipinr)
 {
 	trace_ipi_raise_rcuidle(target, ipi_types[ipinr]);
 	__smp_cross_call(target, ipinr);
-}
-
-DEFINE_PER_CPU(bool, pending_ipi);
-static void smp_cross_call_common(const struct cpumask *cpumask,
-						unsigned int func)
-{
-	unsigned int cpu;
-
-	for_each_cpu(cpu, cpumask)
-		per_cpu(pending_ipi, cpu) = true;
-
-	smp_cross_call(cpumask, func);
 }
 
 void show_ipi_list(struct seq_file *p, int prec)
@@ -570,32 +569,31 @@ u64 smp_irq_stat_cpu(unsigned int cpu)
 
 void arch_send_call_function_ipi_mask(const struct cpumask *mask)
 {
-	smp_cross_call_common(mask, IPI_CALL_FUNC);
+	smp_cross_call(mask, IPI_CALL_FUNC);
 }
 
 void arch_send_wakeup_ipi_mask(const struct cpumask *mask)
 {
-	smp_cross_call_common(mask, IPI_WAKEUP);
+	smp_cross_call(mask, IPI_WAKEUP);
 }
 
 void arch_send_call_function_single_ipi(int cpu)
 {
-	smp_cross_call_common(cpumask_of(cpu), IPI_CALL_FUNC);
+	smp_cross_call(cpumask_of(cpu), IPI_CALL_FUNC);
 }
 
 #ifdef CONFIG_IRQ_WORK
 void arch_irq_work_raise(void)
 {
 	if (arch_irq_work_has_interrupt())
-		smp_cross_call_common(cpumask_of(smp_processor_id()),
-				IPI_IRQ_WORK);
+		smp_cross_call(cpumask_of(smp_processor_id()), IPI_IRQ_WORK);
 }
 #endif
 
 #ifdef CONFIG_GENERIC_CLOCKEVENTS_BROADCAST
 void tick_broadcast(const struct cpumask *mask)
 {
-	smp_cross_call_common(mask, IPI_TIMER);
+	smp_cross_call(mask, IPI_TIMER);
 }
 #endif
 
@@ -606,8 +604,7 @@ static DEFINE_RAW_SPINLOCK(stop_lock);
  */
 static void ipi_cpu_stop(unsigned int cpu)
 {
-	if (system_state == SYSTEM_BOOTING ||
-	    system_state == SYSTEM_RUNNING) {
+	if (system_state <= SYSTEM_RUNNING) {
 		raw_spin_lock(&stop_lock);
 		pr_crit("CPU%u: stopping\n", cpu);
 		dump_stack();
@@ -714,14 +711,14 @@ void handle_IPI(int ipinr, struct pt_regs *regs)
 
 	if ((unsigned)ipinr < NR_IPI)
 		trace_ipi_exit_rcuidle(ipi_types[ipinr]);
-
-	per_cpu(pending_ipi, cpu) = false;
 	set_irq_regs(old_regs);
 }
 
 void smp_send_reschedule(int cpu)
 {
-	smp_cross_call_common(cpumask_of(cpu), IPI_RESCHEDULE);
+	if (__smp_update_ipi_history_cb)
+		__smp_update_ipi_history_cb(cpu);
+	smp_cross_call(cpumask_of(cpu), IPI_RESCHEDULE);
 }
 
 void smp_send_stop(void)
@@ -732,7 +729,7 @@ void smp_send_stop(void)
 	cpumask_copy(&mask, cpu_online_mask);
 	cpumask_clear_cpu(smp_processor_id(), &mask);
 	if (!cpumask_empty(&mask))
-		smp_cross_call_common(&mask, IPI_CPU_STOP);
+		smp_cross_call(&mask, IPI_CPU_STOP);
 
 	/* Wait up to one second for other CPUs to stop */
 	timeout = USEC_PER_SEC;
@@ -820,15 +817,6 @@ core_initcall(register_cpufreq_notifier);
 
 static void raise_nmi(cpumask_t *mask)
 {
-	/*
-	 * Generate the backtrace directly if we are running in a calling
-	 * context that is not preemptible by the backtrace IPI. Note
-	 * that nmi_cpu_backtrace() automatically removes the current cpu
-	 * from mask.
-	 */
-	if (cpumask_test_cpu(smp_processor_id(), mask) && irqs_disabled())
-		nmi_cpu_backtrace(NULL);
-
 	__smp_cross_call(mask, IPI_CPU_BACKTRACE);
 }
 

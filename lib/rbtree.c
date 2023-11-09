@@ -311,11 +311,26 @@ ____rb_erase_color(struct rb_node *parent, struct rb_root *root,
 				 *
 				 *   (p)           (p)
 				 *   / \           / \
-				 *  N   S    -->  N   Sl
+				 *  N   S    -->  N   sl
 				 *     / \             \
-				 *    sl  Sr            s
+				 *    sl  Sr            S
 				 *                       \
 				 *                        Sr
+				 *
+				 * Note: p might be red, and then both
+				 * p and sl are red after rotation(which
+				 * breaks property 4). This is fixed in
+				 * Case 4 (in __rb_rotate_set_parents()
+				 *         which set sl the color of p
+				 *         and set p RB_BLACK)
+				 *
+				 *   (p)            (sl)
+				 *   / \            /  \
+				 *  N   sl   -->   P    S
+				 *       \        /      \
+				 *        S      N        Sr
+				 *         \
+				 *          Sr
 				 */
 				tmp1 = tmp2->rb_right;
 				WRITE_ONCE(sibling->rb_left, tmp1);
@@ -380,7 +395,7 @@ ____rb_erase_color(struct rb_node *parent, struct rb_root *root,
 					}
 					break;
 				}
-				/* Case 3 - right rotate at sibling */
+				/* Case 3 - left rotate at sibling */
 				tmp1 = tmp2->rb_left;
 				WRITE_ONCE(sibling->rb_right, tmp1);
 				WRITE_ONCE(tmp2->rb_left, sibling);
@@ -392,7 +407,7 @@ ____rb_erase_color(struct rb_node *parent, struct rb_root *root,
 				tmp1 = sibling;
 				sibling = tmp2;
 			}
-			/* Case 4 - left rotate at parent + color flips */
+			/* Case 4 - right rotate at parent + color flips */
 			tmp2 = sibling->rb_right;
 			WRITE_ONCE(parent->rb_left, tmp2);
 			WRITE_ONCE(sibling->rb_right, parent);
@@ -427,7 +442,9 @@ static inline void dummy_copy(struct rb_node *old, struct rb_node *new) {}
 static inline void dummy_rotate(struct rb_node *old, struct rb_node *new) {}
 
 static const struct rb_augment_callbacks dummy_callbacks = {
-	dummy_propagate, dummy_copy, dummy_rotate
+	.propagate = dummy_propagate,
+	.copy = dummy_copy,
+	.rotate = dummy_rotate
 };
 
 void rb_insert_color(struct rb_node *node, struct rb_root *root)
@@ -585,6 +602,16 @@ void rb_replace_node(struct rb_node *victim, struct rb_node *new,
 	__rb_change_child(victim, new, parent, root);
 }
 EXPORT_SYMBOL(rb_replace_node);
+
+void rb_replace_node_cached(struct rb_node *victim, struct rb_node *new,
+			    struct rb_root_cached *root)
+{
+	rb_replace_node(victim, new, &root->rb_root);
+
+	if (root->rb_leftmost == victim)
+		root->rb_leftmost = new;
+}
+EXPORT_SYMBOL(rb_replace_node_cached);
 
 void rb_replace_node_rcu(struct rb_node *victim, struct rb_node *new,
 			 struct rb_root *root)

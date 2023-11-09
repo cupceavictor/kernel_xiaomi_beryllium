@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0
 core-y += arch/x86/crypto/
 
 ifeq ($(CONFIG_X86_32),y)
@@ -11,8 +12,6 @@ CHECKFLAGS	+= -D__i386__
 KBUILD_CFLAGS		+= $(call cc-option,-m32)
 KBUILD_AFLAGS		+= $(call cc-option,-m32)
 LINK-y			+= $(call cc-option,-m32)
-
-export LDFLAGS
 
 LDS_EXTRA		:= -Ui386
 export LDS_EXTRA

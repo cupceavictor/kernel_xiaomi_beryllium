@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __KERNEL_PRINTK__
 #define __KERNEL_PRINTK__
 
@@ -8,7 +9,10 @@
 #include <linux/cache.h>
 
 extern const char linux_banner[];
+extern const char *linux_banner_ptr;
 extern const char linux_proc_banner[];
+
+#define PRINTK_MAX_SINGLE_HEADER_LEN 2
 
 static inline int printk_get_level(const char *buffer)
 {
@@ -31,6 +35,14 @@ static inline const char *printk_skip_level(const char *buffer)
 	return buffer;
 }
 
+static inline const char *printk_skip_headers(const char *buffer)
+{
+	while (printk_get_level(buffer))
+		buffer = printk_skip_level(buffer);
+
+	return buffer;
+}
+
 #define CONSOLE_EXT_LOG_MAX	8192
 
 /* printk's without a loglevel use this.. */
@@ -39,10 +51,15 @@ static inline const char *printk_skip_level(const char *buffer)
 /* We show everything that is MORE important than this.. */
 #define CONSOLE_LOGLEVEL_SILENT  0 /* Mum's the word */
 #define CONSOLE_LOGLEVEL_MIN	 1 /* Minimum loglevel we let people use */
-#define CONSOLE_LOGLEVEL_QUIET	 4 /* Shhh ..., when booted with "quiet" */
-#define CONSOLE_LOGLEVEL_DEFAULT 7 /* anything MORE serious than KERN_DEBUG */
 #define CONSOLE_LOGLEVEL_DEBUG	10 /* issue debug messages */
 #define CONSOLE_LOGLEVEL_MOTORMOUTH 15	/* You can't shut this one up */
+
+/*
+ * Default used to be hard-coded at 7, quiet used to be hardcoded at 4,
+ * we're now allowing both to be set from kernel config.
+ */
+#define CONSOLE_LOGLEVEL_DEFAULT CONFIG_CONSOLE_LOGLEVEL_DEFAULT
+#define CONSOLE_LOGLEVEL_QUIET	 CONFIG_CONSOLE_LOGLEVEL_QUIET
 
 extern int console_printk[];
 
@@ -116,10 +133,8 @@ struct va_format {
  */
 #define no_printk(fmt, ...)				\
 ({							\
-	do {						\
-		if (0)					\
-			printk(fmt, ##__VA_ARGS__);	\
-	} while (0);					\
+	if (0)						\
+		printk(fmt, ##__VA_ARGS__);		\
 	0;						\
 })
 
@@ -132,17 +147,15 @@ void early_printk(const char *s, ...) { }
 #endif
 
 #ifdef CONFIG_PRINTK_NMI
-extern void printk_nmi_init(void);
 extern void printk_nmi_enter(void);
 extern void printk_nmi_exit(void);
-extern void printk_nmi_flush(void);
-extern void printk_nmi_flush_on_panic(void);
+extern void printk_nmi_direct_enter(void);
+extern void printk_nmi_direct_exit(void);
 #else
-static inline void printk_nmi_init(void) { }
 static inline void printk_nmi_enter(void) { }
 static inline void printk_nmi_exit(void) { }
-static inline void printk_nmi_flush(void) { }
-static inline void printk_nmi_flush_on_panic(void) { }
+static inline void printk_nmi_direct_enter(void) { }
+static inline void printk_nmi_direct_exit(void) { }
 #endif /* PRINTK_NMI */
 
 #ifdef CONFIG_PRINTK
@@ -179,7 +192,6 @@ extern bool printk_timed_ratelimit(unsigned long *caller_jiffies,
 
 extern int printk_delay_msec;
 extern int dmesg_restrict;
-extern int kptr_restrict;
 
 extern int
 devkmsg_sysctl_set_loglvl(struct ctl_table *table, int write, void __user *buf,
@@ -189,11 +201,14 @@ extern void wake_up_klogd(void);
 
 char *log_buf_addr_get(void);
 u32 log_buf_len_get(void);
-void log_buf_kexec_setup(void);
+void log_buf_vmcoreinfo_setup(void);
 void __init setup_log_buf(int early);
 __printf(1, 2) void dump_stack_set_arch_desc(const char *fmt, ...);
 void dump_stack_print_info(const char *log_lvl);
 void show_regs_print_info(const char *log_lvl);
+extern asmlinkage void dump_stack(void) __cold;
+extern void printk_safe_flush(void);
+extern void printk_safe_flush_on_panic(void);
 #else
 static inline __printf(1, 0)
 int vprintk(const char *s, va_list args)
@@ -234,7 +249,7 @@ static inline u32 log_buf_len_get(void)
 	return 0;
 }
 
-static inline void log_buf_kexec_setup(void)
+static inline void log_buf_vmcoreinfo_setup(void)
 {
 }
 
@@ -253,9 +268,21 @@ static inline void dump_stack_print_info(const char *log_lvl)
 static inline void show_regs_print_info(const char *log_lvl)
 {
 }
+
+static inline asmlinkage void dump_stack(void)
+{
+}
+
+static inline void printk_safe_flush(void)
+{
+}
+
+static inline void printk_safe_flush_on_panic(void)
+{
+}
 #endif
 
-extern asmlinkage void dump_stack(void) __cold;
+extern int kptr_restrict;
 
 #ifndef pr_fmt
 #define pr_fmt(fmt) fmt
@@ -495,6 +522,25 @@ static inline void print_hex_dump_bytes(const char *prefix_str, int prefix_type,
 static inline void print_hex_dump_debug(const char *prefix_str, int prefix_type,
 					int rowsize, int groupsize,
 					const void *buf, size_t len, bool ascii)
+{
+}
+#endif
+
+#ifdef CONFIG_PRINTK
+extern void __printk_safe_enter(void);
+extern void __printk_safe_exit(void);
+/*
+ * The printk_deferred_enter/exit macros are available only as a hack for
+ * some code paths that need to defer all printk console printing. Interrupts
+ * must be disabled for the deferred duration.
+ */
+#define printk_deferred_enter __printk_safe_enter
+#define printk_deferred_exit __printk_safe_exit
+#else
+static inline void printk_deferred_enter(void)
+{
+}
+static inline void printk_deferred_exit(void)
 {
 }
 #endif

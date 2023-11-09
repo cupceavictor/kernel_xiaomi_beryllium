@@ -523,12 +523,7 @@ Accessing a task's cgroup pointer may be done in the following ways:
 Each subsystem should:
 
 - add an entry in linux/cgroup_subsys.h
-- define a cgroup_subsys object called <name>_subsys
-
-If a subsystem can be compiled as a module, it should also have in its
-module initcall a call to cgroup_load_subsys(), and in its exitcall a
-call to cgroup_unload_subsys(). It should also set its_subsys.module =
-THIS_MODULE in its .c file.
+- define a cgroup_subsys object called <name>_cgrp_subsys
 
 Each subsystem may export the following methods. The only mandatory
 methods are css_alloc/free. Any others that are null are presumed to
@@ -577,15 +572,6 @@ its subsystem state object. By the time this method is called, @cgrp
 is completely unused; @cgrp->parent is still valid. (Note - can also
 be called for a newly-created cgroup if an error occurs after this
 subsystem's create() method has been called for the new cgroup).
-
-int allow_attach(struct cgroup *cgrp, struct cgroup_taskset *tset)
-(cgroup_mutex held by caller)
-
-Called prior to moving a task into a cgroup; if the subsystem
-returns an error, this will abort the attach operation.  Used
-to extend the permission checks - if all subsystems in a cgroup
-return 0, the attach will be allowed to proceed, even if the
-default permission check (root or same user) fails.
 
 int can_attach(struct cgroup *cgrp, struct cgroup_taskset *tset)
 (cgroup_mutex held by caller)

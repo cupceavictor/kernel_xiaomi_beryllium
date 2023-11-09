@@ -1,15 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  *  debugfs.h - a tiny little debug file system
  *
  *  Copyright (C) 2004 Greg Kroah-Hartman <greg@kroah.com>
  *  Copyright (C) 2004 IBM Inc.
  *
- *	This program is free software; you can redistribute it and/or
- *	modify it under the terms of the GNU General Public License version
- *	2 as published by the Free Software Foundation.
- *
  *  debugfs is for people to use instead of /proc or /sys.
- *  See Documentation/DocBook/filesystems for more details.
+ *  See Documentation/filesystems/ for more details.
  */
 
 #ifndef _DEBUGFS_H_
@@ -38,11 +35,12 @@ struct debugfs_regset32 {
 	const struct debugfs_reg32 *regs;
 	int nregs;
 	void __iomem *base;
+	struct device *dev;	/* Optional device for Runtime PM */
 };
 
 extern struct dentry *arch_debugfs_dir;
 
-#define DEFINE_DEBUGFS_ATTRIBUTE(__fops, __get, __set, __fmt)		\
+#define DEFINE_DEBUGFS_ATTRIBUTE_XSIGNED(__fops, __get, __set, __fmt, __is_signed)	\
 static int __fops ## _open(struct inode *inode, struct file *file)	\
 {									\
 	__simple_attr_check_format(__fmt, 0ull);			\
@@ -53,13 +51,21 @@ static const struct file_operations __fops = {				\
 	.open	 = __fops ## _open,					\
 	.release = simple_attr_release,					\
 	.read	 = debugfs_attr_read,					\
-	.write	 = debugfs_attr_write,					\
-	.llseek  = generic_file_llseek,					\
+	.write	 = (__is_signed) ? debugfs_attr_write_signed : debugfs_attr_write,	\
+	.llseek  = no_llseek,						\
 }
+
+#define DEFINE_DEBUGFS_ATTRIBUTE(__fops, __get, __set, __fmt)		\
+	DEFINE_DEBUGFS_ATTRIBUTE_XSIGNED(__fops, __get, __set, __fmt, false)
+
+#define DEFINE_DEBUGFS_ATTRIBUTE_SIGNED(__fops, __get, __set, __fmt)	\
+	DEFINE_DEBUGFS_ATTRIBUTE_XSIGNED(__fops, __get, __set, __fmt, true)
 
 typedef struct vfsmount *(*debugfs_automount_t)(struct dentry *, void *);
 
 #if defined(CONFIG_DEBUG_FS)
+
+struct dentry *debugfs_lookup(const char *name, struct dentry *parent);
 
 struct dentry *debugfs_create_file(const char *name, umode_t mode,
 				   struct dentry *parent, void *data,
@@ -86,6 +92,8 @@ struct dentry *debugfs_create_automount(const char *name,
 void debugfs_remove(struct dentry *dentry);
 void debugfs_remove_recursive(struct dentry *dentry);
 
+void debugfs_lookup_and_remove(const char *name, struct dentry *parent);
+
 const struct file_operations *debugfs_real_fops(const struct file *filp);
 
 int debugfs_file_get(struct dentry *dentry);
@@ -94,6 +102,8 @@ void debugfs_file_put(struct dentry *dentry);
 ssize_t debugfs_attr_read(struct file *file, char __user *buf,
 			size_t len, loff_t *ppos);
 ssize_t debugfs_attr_write(struct file *file, const char __user *buf,
+			size_t len, loff_t *ppos);
+ssize_t debugfs_attr_write_signed(struct file *file, const char __user *buf,
 			size_t len, loff_t *ppos);
 
 struct dentry *debugfs_rename(struct dentry *old_dir, struct dentry *old_dentry,
@@ -162,8 +172,22 @@ ssize_t debugfs_write_file_bool(struct file *file, const char __user *user_buf,
  * want to duplicate the design decision mistakes of procfs and devfs again.
  */
 
+static inline struct dentry *debugfs_lookup(const char *name,
+					    struct dentry *parent)
+{
+	return ERR_PTR(-ENODEV);
+}
+
 static inline struct dentry *debugfs_create_file(const char *name, umode_t mode,
 					struct dentry *parent, void *data,
+					const struct file_operations *fops)
+{
+	return ERR_PTR(-ENODEV);
+}
+
+static inline struct dentry *debugfs_create_file_unsafe(const char *name,
+					umode_t mode, struct dentry *parent,
+					void *data,
 					const struct file_operations *fops)
 {
 	return ERR_PTR(-ENODEV);
@@ -204,6 +228,12 @@ static inline void debugfs_remove(struct dentry *dentry)
 static inline void debugfs_remove_recursive(struct dentry *dentry)
 { }
 
+static inline void debugfs_lookup_and_remove(const char *name,
+					     struct dentry *parent)
+{ }
+
+const struct file_operations *debugfs_real_fops(const struct file *filp);
+
 static inline int debugfs_file_get(struct dentry *dentry)
 {
 	return 0;
@@ -219,6 +249,13 @@ static inline ssize_t debugfs_attr_read(struct file *file, char __user *buf,
 }
 
 static inline ssize_t debugfs_attr_write(struct file *file,
+					const char __user *buf,
+					size_t len, loff_t *ppos)
+{
+	return -ENODEV;
+}
+
+static inline ssize_t debugfs_attr_write_signed(struct file *file,
 					const char __user *buf,
 					size_t len, loff_t *ppos)
 {
@@ -255,6 +292,14 @@ static inline struct dentry *debugfs_create_u32(const char *name, umode_t mode,
 static inline struct dentry *debugfs_create_u64(const char *name, umode_t mode,
 						struct dentry *parent,
 						u64 *value)
+{
+	return ERR_PTR(-ENODEV);
+}
+
+static inline struct dentry *debugfs_create_ulong(const char *name,
+						umode_t mode,
+						struct dentry *parent,
+						unsigned long *value)
 {
 	return ERR_PTR(-ENODEV);
 }

@@ -19,23 +19,7 @@
 #include <asm/qrwlock.h>
 #include <asm/qspinlock.h>
 
-/*
- * Accesses appearing in program order before a spin_lock() operation
- * can be reordered with accesses inside the critical section, by virtue
- * of arch_spin_lock being constructed using acquire semantics.
- *
- * In cases where this is problematic (e.g. try_to_wake_up), an
- * smp_mb__before_spinlock() can restore the required ordering.
- */
-#define smp_mb__before_spinlock()	smp_mb()
-
-/*
- * Changing this will break osq_lock() thanks to the call inside
- * smp_cond_load_relaxed().
- *
- * See:
- * https://lore.kernel.org/lkml/20200110100612.GC2827@hirez.programming.kicks-ass.net
- */
-#define vcpu_is_preempted(cpu)	false
+/* See include/linux/spinlock.h */
+#define smp_mb__after_spinlock()	smp_mb()
 
 #endif /* __ASM_SPINLOCK_H */
